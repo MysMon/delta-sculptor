@@ -1,5 +1,7 @@
 # Delta Sculptor
 
+## Warning: This project is still in development and not yet ready for production use.
+
 [![npm version](https://badge.fury.io/js/delta-sculptor.svg)](https://badge.fury.io/js/delta-sculptor)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-blue.svg)](https://www.typescriptlang.org/)
@@ -59,7 +61,7 @@ const patch = [{ op: 'replace', path: '/b/c', value: 3 }];
 
 const result = DeltaSculptor.applyPatchImmutable(original, patch);
 console.log(original); // { a: 1, b: { c: 2 } }
-console.log(result);   // { a: 1, b: { c: 3 } }
+console.log(result); // { a: 1, b: { c: 3 } }
 ```
 
 ### Move Detection
@@ -68,7 +70,9 @@ console.log(result);   // { a: 1, b: { c: 3 } }
 const oldArray = [1, 2, 3, 4];
 const newArray = [4, 2, 3, 1];
 
-const patch = DeltaSculptor.createPatch(oldArray, newArray, { detectMove: true });
+const patch = DeltaSculptor.createPatch(oldArray, newArray, {
+  detectMove: true,
+});
 console.log(patch);
 // [
 //   { op: 'move', from: '/3', path: '/0' },
@@ -82,7 +86,7 @@ console.log(patch);
 const obj = { a: 1, b: 2 };
 const patch = [
   { op: 'replace', path: '/a', value: 3 },
-  { op: 'remove', path: '/b' }
+  { op: 'remove', path: '/b' },
 ];
 
 const inversePatch = DeltaSculptor.applyPatchWithInverse(obj, patch);
@@ -99,7 +103,7 @@ console.log(obj); // { a: 1, b: 2 }
 const obj = { a: 1 };
 const patch = [
   { op: 'replace', path: '/a', value: 2 },
-  { op: 'replace', path: '/nonexistent', value: 3 } // This will fail
+  { op: 'replace', path: '/nonexistent', value: 3 }, // This will fail
 ];
 
 try {
@@ -118,6 +122,7 @@ try {
 Generates a JSON Patch that transforms `oldObj` into `newObj`.
 
 Options:
+
 - `detectMove?: boolean` - Enable move operation detection
 - `batchArrayOps?: boolean` - Batch sequential array operations
 - `maxDepth?: number` - Maximum recursion depth
@@ -162,7 +167,8 @@ npm run format
 
 ## License
 
-MIT © [Your Name]
+MIT @MysMon
+Please see the [License File](LICENSE) for more information.
 
 ## Contributing
 
