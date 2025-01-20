@@ -1,332 +1,425 @@
 import { PatchError, PatchErrorCode } from './errors';
-import { findLCS } from './lcs';
-import { JsonPatch, JsonPatchOperation } from './types';
-import { deepEqual } from './validate';
+import { JsonPatch } from './types';
 
 interface ArrayOperation {
   type: 'add' | 'remove' | 'move';
   index: number;
-  value?: any;
   fromIndex?: number;
+  value?: any;
 }
 
 /**
- * Validates array indices in a JSON Pointer path
+ * Converts array operations to JSON Patch format
  */
-export function validateArrayIndex(target: any[], path: string): number {
-  // Extract the last segment that should be the array index
-  const segments = path.split('/');
-  const lastSegment = segments[segments.length - 1];
+function toJsonPatch(operations: ArrayOperation[]): JsonPatch {
+  return operations.map(op => {
+    switch (op.type) {
+      case 'move':
+        return {
+          op: 'move',
+          path: `/${op.index}`,
+          from: `/${op.fromIndex}`,
+        };
+      case 'add':
+        return {
+          op: 'add',
+          path: `/${op.index}`,
+          value: op.value,
+        };
+      case 'remove':
+        return {
+          op: 'remove',
+          path: `/${op.index}`,
+        };
+    }
+  });
+}
 
-  if (lastSegment === '') {
+/**
+ * Converts JSON Patch to array operations format
+ */
+function fromJsonPatch(patch: JsonPatch): ArrayOperation[] {
+  return patch
+    .map(op => {
+      const path = getArrayPath(op.path);
+      if (!path) return null;
+
+      const index = parseInt(path.index, 10);
+      if (isNaN(index)) return null;
+
+      let fromPath;
+      let fromIndex;
+
+      switch (op.op) {
+        case 'move':
+          fromPath = getArrayPath(op.from!);
+          if (!fromPath) return null;
+          fromIndex = parseInt(fromPath.index, 10);
+          if (isNaN(fromIndex)) return null;
+          return {
+            type: 'move',
+            index,
+            fromIndex,
+            value: undefined,
+          };
+        case 'add':
+          return {
+            type: 'add',
+            index,
+            value: op.value,
+          };
+        case 'remove':
+          return {
+            type: 'remove',
+            index,
+          };
+        default:
+          return null;
+      }
+    })
+    .filter((op): op is ArrayOperation => op !== null);
+}
+
+/**
+ * Validates array indices in patch operations
+ */
+export function validateArrayIndex(array: any[], path: string): number {
+  const match = /^\/(-|\d+)$/.exec(path);
+  if (!match) {
     throw new PatchError(
-      PatchErrorCode.INVALID_POINTER,
-      `Invalid array index in path: ${path}`
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Invalid array index pointer'
     );
   }
 
-  const index = lastSegment === '-' ? target.length : parseInt(lastSegment, 10);
-  if (
-    isNaN(index) ||
-    index < 0 ||
-    (lastSegment !== '-' && index > target.length)
-  ) {
-    throw PatchError.arrayIndexError(path, String(index));
+  const index = match[1] === '-' ? array.length : parseInt(match[1], 10);
+
+  if (index < 0) {
+    throw new PatchError(
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Array index cannot be negative'
+    );
+  }
+
+  if (match[1] !== '-' && index >= array.length) {
+    throw new PatchError(
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Array index out of bounds'
+    );
   }
 
   return index;
 }
 
 /**
- * Optimize array operations by detecting moves
+ * Generates array operations that transform source array into target array
  */
-export function optimizeArrayOperations(
-  operations: ArrayOperation[]
-): ArrayOperation[] {
-  const optimized: ArrayOperation[] = [];
-  const removes = new Map<any, number>();
-
-  // First pass: collect remove operations
-  operations.forEach((op, index) => {
-    if (op.type === 'remove' && op.value !== undefined) {
-      removes.set(op.value, index);
-    }
-  });
-
-  // Second pass: convert remove+add into moves where possible
-  operations.forEach(op => {
-    if (op.type === 'add' && removes.has(op.value)) {
-      const removeIndex = removes.get(op.value)!;
-      optimized.push({
-        type: 'move',
-        index: op.index,
-        fromIndex: operations[removeIndex].index,
-      });
-      removes.delete(op.value);
-    } else if (op.type === 'remove' && !removes.has(op.value)) {
-      optimized.push(op);
-    } else if (op.type !== 'remove') {
-      optimized.push(op);
-    }
-  });
-
-  return optimized;
-}
-
-/**
- * Batch sequential array operations for better performance
- */
-export function batchArrayOperations(
+function handleRemaining(
   operations: ArrayOperation[],
-  maxBatchSize: number = 100
-): JsonPatch {
-  const patch: JsonPatch = [];
-  let currentBatch: ArrayOperation[] | null = null;
-
-  operations.forEach(op => {
-    if (!currentBatch || currentBatch[0].type !== op.type) {
-      if (currentBatch) {
-        patch.push(createBatchOperation(currentBatch));
-      }
-      currentBatch = [op];
-    } else if (
-      currentBatch.length < maxBatchSize &&
-      isSequentialOperation(currentBatch[currentBatch.length - 1], op)
-    ) {
-      currentBatch.push(op);
-    } else {
-      patch.push(createBatchOperation(currentBatch));
-      currentBatch = [op];
-    }
-  });
-
-  if (currentBatch) {
-    patch.push(createBatchOperation(currentBatch));
-  }
-
-  return patch;
-}
-
-function isSequentialOperation(
-  prev: ArrayOperation,
-  curr: ArrayOperation
-): boolean {
-  if (prev.type !== curr.type) return false;
-
-  if (prev.type === 'add') {
-    return curr.index === prev.index + 1;
-  }
-
-  if (prev.type === 'remove') {
-    return curr.index === prev.index - 1;
-  }
-
-  return false;
-}
-
-function createBatchOperation(batch: ArrayOperation[]): JsonPatchOperation {
-  const first = batch[0];
-  const last = batch[batch.length - 1];
-
-  switch (first.type) {
-    case 'add': {
-      // For single adds, just use the direct value
-      if (batch.length === 1) {
-        return {
-          op: 'add',
-          path: `/${first.index}`,
-          value: first.value,
-        };
-      }
-      // For sequential adds, check if they're truly sequential
-      const allSequential = batch.every(
-        (op, i) => i === 0 || op.index === batch[i - 1].index + 1
-      );
-      if (allSequential) {
-        return {
-          op: 'add',
-          path: `/${first.index}`,
-          value: batch.map(op => op.value),
-        };
-      }
-      // If not sequential, keep as individual operations
-      return {
-        op: 'add',
-        path: `/${first.index}`,
-        value: first.value,
-      };
-    }
-
-    case 'remove': {
-      const sequential =
-        batch.length === 1 ||
-        (batch.length > 1 &&
-          last.index === first.index - (batch.length - 1) &&
-          batch.every(
-            (op, i) => i === 0 || op.index === batch[i - 1].index - 1
-          ));
-
-      if (sequential) {
-        return {
-          op: 'remove',
-          path: `/${last.index}`,
-          count: batch.length,
-        };
-      }
-      return {
-        op: 'remove',
-        path: `/${first.index}`,
-      };
-    }
-
-    case 'move':
-      return {
-        op: 'move',
-        path: `/${first.index}`,
-        from: `/${first.fromIndex}`,
-      };
-
-    default:
-      throw new PatchError(
-        PatchErrorCode.INVALID_OPERATION,
-        `Invalid batch operation type: ${(first as any).type}`
-      );
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
+  if (sourceIndex >= source.length) {
+    // Add remaining target elements
+    operations.push({
+      type: 'add',
+      index: targetIndex,
+      value: target[targetIndex],
+    });
+    return { sourceIndex, targetIndex: targetIndex + 1 };
+  } else {
+    // Remove remaining source elements
+    operations.push({
+      type: 'remove',
+      index: sourceIndex,
+      value: source[sourceIndex],
+    });
+    return { sourceIndex: sourceIndex + 1, targetIndex };
   }
 }
 
-function buildValuePositions(arr: any[]): Map<any, number[]> {
-  const positions = new Map<any, number[]>();
-  for (let i = 0; i < arr.length; i++) {
-    const value = arr[i];
-    const valuePositions = positions.get(value) || [];
-    valuePositions.push(i);
-    positions.set(value, valuePositions);
-  }
-  return positions;
-}
-
-function removeValuePosition(
-  positions: Map<any, number[]>,
-  value: any,
-  index: number
-): void {
-  const valuePositions = positions.get(value) || [];
-  const posIndex = valuePositions.indexOf(index);
-  if (posIndex !== -1) {
-    valuePositions.splice(posIndex, 1);
-    if (valuePositions.length === 0) {
-      positions.delete(value);
-    }
-  }
-}
-
-function handleMove(
+function handleMoveOperation(
   operations: ArrayOperation[],
-  positions: Map<any, number[]>,
-  value: any,
-  newIndex: number,
-  bestMovePos: number
-): void {
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number,
+  targetInSource: number
+): { sourceIndex: number; targetIndex: number } {
   operations.push({
     type: 'move',
-    index: newIndex,
-    fromIndex: bestMovePos,
+    index: targetIndex,
+    fromIndex: targetInSource,
+    value: target[targetIndex],
   });
-  removeValuePosition(positions, value, bestMovePos);
+  source.splice(targetInSource, 1);
+  return { sourceIndex: targetInSource, targetIndex: targetIndex + 1 };
 }
 
-function handleReplace(
+function handleSimpleAddRemove(
   operations: ArrayOperation[],
-  positions: Map<any, number[]>,
-  oldValue: any,
-  newValue: any,
-  oldIndex: number,
-  newIndex: number
-): void {
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
   operations.push({
     type: 'remove',
-    index: oldIndex,
-    value: oldValue,
+    index: sourceIndex,
+    value: source[sourceIndex],
   });
   operations.push({
     type: 'add',
-    index: newIndex,
-    value: newValue,
+    index: targetIndex,
+    value: target[targetIndex],
   });
-  removeValuePosition(positions, oldValue, oldIndex - 1);
+  return { sourceIndex: sourceIndex + 1, targetIndex: targetIndex + 1 };
 }
 
-/**
- * Generate array operations using LCS for optimal diff
- */
 export function generateArrayOperations(
-  oldArr: any[],
-  newArr: any[]
+  source: any[],
+  target: any[]
 ): ArrayOperation[] {
-  const lcsIndices = findLCS(oldArr, newArr);
   const operations: ArrayOperation[] = [];
-  const oldValuePositions = buildValuePositions(oldArr);
+  let sourceIndex = 0;
+  let targetIndex = 0;
 
-  let oldIndex = 0;
-  let newIndex = 0;
-  let lcsPos = 0;
-
-  while (newIndex < newArr.length || oldIndex < oldArr.length) {
-    // Case 1: Common element in LCS
-    if (lcsPos < lcsIndices.length && oldIndex === lcsIndices[lcsPos]) {
-      oldIndex++;
-      newIndex++;
-      lcsPos++;
-      continue;
-    }
-
-    // Case 2: Processing new array elements
-    if (newIndex < newArr.length) {
-      const value = newArr[newIndex];
-      const positions = oldValuePositions.get(value) || [];
-      const bestMovePos = positions.find(pos => pos > oldIndex);
-
-      if (bestMovePos !== undefined) {
-        handleMove(operations, oldValuePositions, value, newIndex, bestMovePos);
-        newIndex++;
-      } else if (oldIndex < oldArr.length) {
-        const oldValue = oldArr[oldIndex];
-        if (deepEqual(oldValue, value, new WeakMap())) {
-          oldIndex++;
-          newIndex++;
-        } else {
-          handleReplace(
-            operations,
-            oldValuePositions,
-            oldValue,
-            value,
-            oldIndex,
-            newIndex
-          );
-          oldIndex++;
-          newIndex++;
-        }
+  while (sourceIndex < source.length || targetIndex < target.length) {
+    if (sourceIndex >= source.length || targetIndex >= target.length) {
+      const result = handleRemaining(
+        operations,
+        source,
+        target,
+        sourceIndex,
+        targetIndex
+      );
+      sourceIndex = result.sourceIndex;
+      targetIndex = result.targetIndex;
+    } else if (source[sourceIndex] === target[targetIndex]) {
+      // Elements match, skip
+      sourceIndex++;
+      targetIndex++;
+    } else {
+      // Look for possible moves
+      const targetInSource = source.indexOf(
+        target[targetIndex],
+        sourceIndex + 1
+      );
+      if (targetInSource >= 0) {
+        const result = handleMoveOperation(
+          operations,
+          source,
+          target,
+          sourceIndex,
+          targetIndex,
+          targetInSource
+        );
+        sourceIndex = result.sourceIndex;
+        targetIndex = result.targetIndex;
       } else {
-        operations.push({
-          type: 'add',
-          index: newIndex,
-          value,
-        });
-        newIndex++;
+        const result = handleSimpleAddRemove(
+          operations,
+          source,
+          target,
+          sourceIndex,
+          targetIndex
+        );
+        sourceIndex = result.sourceIndex;
+        targetIndex = result.targetIndex;
       }
-      continue;
     }
-
-    // Case 3: Remove remaining old elements
-    const value = oldArr[oldIndex];
-    operations.push({
-      type: 'remove',
-      index: oldIndex,
-      value,
-    });
-    removeValuePosition(oldValuePositions, value, oldIndex);
-    oldIndex++;
   }
 
   return operations;
+}
+
+/**
+ * Optimizes array operations by detecting moves and combining operations
+ */
+export function optimizeArrayOperations(operations: JsonPatch): JsonPatch {
+  const internalOps = fromJsonPatch(operations);
+  const optimized: ArrayOperation[] = [];
+  let i = 0;
+
+  while (i < internalOps.length) {
+    const current = internalOps[i];
+
+    if (
+      current.type === 'remove' &&
+      i + 1 < internalOps.length &&
+      internalOps[i + 1].type === 'add' &&
+      current.value === internalOps[i + 1].value
+    ) {
+      // Convert remove+add into move
+      optimized.push({
+        type: 'move',
+        index: internalOps[i + 1].index,
+        fromIndex: current.index,
+        value: current.value,
+      });
+      i += 2;
+    } else {
+      optimized.push(current);
+      i++;
+    }
+  }
+
+  return toJsonPatch(optimized);
+}
+
+/**
+ * Batches array operations into JsonPatch operations
+ */
+export function batchArrayOperations(
+  operations: ArrayOperation[],
+  maxBatchSize = Infinity
+): JsonPatch {
+  const patch: JsonPatch = [];
+  let currentBatch: ArrayOperation[] = [];
+  let lastType: string | null = null;
+  let lastIndex: number | null = null;
+
+  function flushBatch(): void {
+    if (currentBatch.length === 0) return;
+
+    if (currentBatch.length === 1) {
+      const op = currentBatch[0];
+      if (op.type === 'move') {
+        patch.push({
+          op: 'move',
+          path: `/${op.index}`,
+          from: `/${op.fromIndex}`,
+        });
+      } else {
+        patch.push({
+          op: op.type === 'add' ? 'add' : 'remove',
+          path: `/${op.index}`,
+          ...(op.type === 'add' ? { value: op.value } : {}),
+        });
+      }
+    } else if (lastType === 'remove') {
+      // Batch sequential removes
+      patch.push({
+        op: 'remove',
+        path: `/${currentBatch[0].index}`,
+        count: currentBatch.length,
+      });
+    } else if (lastType === 'add') {
+      // Batch sequential adds
+      patch.push({
+        op: 'add',
+        path: `/${currentBatch[0].index}`,
+        value: currentBatch.map(op => op.value),
+      });
+    }
+
+    currentBatch = [];
+    lastType = null;
+    lastIndex = null;
+  }
+
+  for (const op of operations) {
+    if (
+      op.type === lastType &&
+      currentBatch.length < maxBatchSize &&
+      ((op.type === 'remove' && op.index === lastIndex! - 1) ||
+        (op.type === 'add' && op.index === lastIndex! + 1))
+    ) {
+      currentBatch.push(op);
+    } else {
+      flushBatch();
+      currentBatch = [op];
+      lastType = op.type;
+      lastIndex = op.index;
+    }
+  }
+
+  flushBatch();
+  return patch;
+}
+
+/**
+ * Gets array path information from a JSON Pointer path
+ */
+export function getArrayPath(
+  path: string
+): { basePath: string; index: string } | null {
+  const match = /^(.*?)\/(-|\d+)$/.exec(path);
+  if (!match) return null;
+
+  return {
+    basePath: match[1],
+    index: match[2],
+  };
+}
+
+/**
+ * Gets the base path for an array and its index
+ */
+export function getArrayBasePath(path: string): string {
+  const lastSlash = path.lastIndexOf('/');
+  return lastSlash >= 0 ? path.slice(0, lastSlash) : '';
+}
+
+/**
+ * Checks if a path refers to an array element
+ */
+export function isArrayPath(path: string): boolean {
+  const lastSegment = path.split('/').pop();
+  return lastSegment === '-' || /^\d+$/.test(lastSegment ?? '');
+}
+
+/**
+ * Splits batched array operations into individual operations
+ */
+export function expandArrayOperations(patch: JsonPatch): JsonPatch {
+  const expanded: JsonPatch = [];
+
+  for (const op of patch) {
+    if (op.op === 'remove' && 'count' in op && typeof op.count === 'number') {
+      // Expand batch remove into individual removes
+      const arrayPath = getArrayPath(op.path);
+      if (!arrayPath) {
+        expanded.push(op);
+        continue;
+      }
+
+      const { basePath, index } = arrayPath;
+      const startIndex = parseInt(index, 10);
+
+      for (let i = 0; i < op.count; i++) {
+        expanded.push({
+          op: 'remove',
+          path: `${basePath}/${startIndex}`,
+        });
+      }
+    } else if (op.op === 'add' && 'value' in op && Array.isArray(op.value)) {
+      // Expand batch add into individual adds
+      const arrayPath = getArrayPath(op.path);
+      if (!arrayPath) {
+        expanded.push(op);
+        continue;
+      }
+
+      const { basePath, index } = arrayPath;
+      const startIndex =
+        index === '-'
+          ? Infinity // Will be converted to actual index when applying
+          : parseInt(index, 10);
+
+      op.value.forEach((value, i) => {
+        expanded.push({
+          op: 'add',
+          path: `${basePath}/${startIndex + i}`,
+          value,
+        });
+      });
+    } else {
+      expanded.push(op);
+    }
+  }
+
+  return expanded;
 }
