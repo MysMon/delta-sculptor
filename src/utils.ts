@@ -4,7 +4,7 @@
  * / -> ~1
  */
 export function escapePointerSegment(segment: string): string {
-  return segment.replace(/~/g, "~0").replace(/\//g, "~1");
+  return segment.replace(/~/g, '~0').replace(/\//g, '~1');
 }
 
 /**
@@ -13,7 +13,7 @@ export function escapePointerSegment(segment: string): string {
  * ~0 -> ~
  */
 export function unescapePointerSegment(segment: string): string {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+  return segment.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
 /**
@@ -22,15 +22,15 @@ export function unescapePointerSegment(segment: string): string {
  * ルート "/" -> [] (空配列)
  */
 export function parsePointer(path: string): string[] {
-  if (path === "") {
+  if (path === '') {
     // 空文字はルートを示す
     return [];
   }
-  if (!path.startsWith("/")) {
+  if (!path.startsWith('/')) {
     throw new Error(`Invalid JSON Pointer: must begin with "/". got: ${path}`);
   }
   // 先頭の "/" を除いたあと "/" で split
-  const segments = path.substring(1).split("/").map(unescapePointerSegment);
+  const segments = path.substring(1).split('/').map(unescapePointerSegment);
   return segments;
 }
 
@@ -61,7 +61,7 @@ export function setValueByPointer(obj: any, path: string, value: any): void {
     // ルート（obj 全体）を差し替える場合
     // JavaScript では参照を置き換えるだけでは呼び出し元のスコープに影響しない
     // ここではエラーにしておく。どうしてもやりたければ呼び出し側で調整。
-    throw new Error("Cannot set the root object itself using JSON Pointer");
+    throw new Error('Cannot set the root object itself using JSON Pointer');
   }
 
   let current = obj;
@@ -78,7 +78,7 @@ export function setValueByPointer(obj: any, path: string, value: any): void {
 
   if (Array.isArray(current)) {
     // 配列への add
-    if (lastSeg === "-") {
+    if (lastSeg === '-') {
       // 末尾に追加
       current.push(value);
     } else {
@@ -101,7 +101,7 @@ export function setValueByPointer(obj: any, path: string, value: any): void {
 export function removeValueByPointer(obj: any, path: string): any {
   const segments = parsePointer(path);
   if (segments.length === 0) {
-    throw new Error("Cannot remove the entire root object");
+    throw new Error('Cannot remove the entire root object');
   }
 
   let current = obj;
@@ -115,7 +115,7 @@ export function removeValueByPointer(obj: any, path: string): any {
   const lastSeg = segments[segments.length - 1];
 
   if (Array.isArray(current)) {
-    const index = lastSeg === "-" ? current.length - 1 : parseInt(lastSeg, 10);
+    const index = lastSeg === '-' ? current.length - 1 : parseInt(lastSeg, 10);
     if (index < 0 || index >= current.length) {
       return undefined; // 範囲外
     }
@@ -134,5 +134,5 @@ export function removeValueByPointer(obj: any, path: string): any {
  * segments をエスケープして "/" で連結
  */
 export function buildPointer(segments: string[]): string {
-  return "/" + segments.map(escapePointerSegment).join("/");
+  return '/' + segments.map(escapePointerSegment).join('/');
 }
