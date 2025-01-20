@@ -1,15 +1,11 @@
-import { JsonPatch } from "./types";
+import { createPatch, CreateDiffOptions } from './diff';
+import { createInversePatch, applyPatchWithInverse } from './inverse';
 import {
   applyPatch,
   applyPatchImmutable,
   applyPatchWithRollback,
-} from "./patch";
-import { createPatch, CreateDiffOptions } from "./diff";
-import {
-  generateInversePatch,
-  applyInversePatch,
-  applyPatchWithInverse,
-} from "./inverse";
+} from './patch';
+import { JsonPatch } from './types';
 
 export class DeltaSculptor {
   /**
@@ -20,7 +16,7 @@ export class DeltaSculptor {
     newObj: any,
     options?: CreateDiffOptions
   ): JsonPatch {
-    return createPatch(oldObj, newObj, "", options || {});
+    return createPatch(oldObj, newObj, '', options || {});
   }
 
   /**
@@ -48,14 +44,14 @@ export class DeltaSculptor {
    * 逆パッチを適用してロールバック
    */
   static applyInversePatch(target: any, inversePatch: JsonPatch): void {
-    applyInversePatch(target, inversePatch);
+    this.applyPatch(target, inversePatch);
   }
 
   /**
    * 逆パッチを生成 (パッチ適用前のオブジェクトが必要)
    */
-  static generateInversePatch(prePatchObj: any, patch: JsonPatch): JsonPatch {
-    return generateInversePatch(prePatchObj, patch);
+  static createInversePatch(prePatchObj: any, patch: JsonPatch): JsonPatch {
+    return createInversePatch(prePatchObj, patch);
   }
 
   /**
