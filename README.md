@@ -1,11 +1,5 @@
 # Delta Sculptor
 
-## Warning: This project is still in development and not yet ready for production use.
-
-[![npm version](https://badge.fury.io/js/delta-sculptor.svg)](https://badge.fury.io/js/delta-sculptor)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-blue.svg)](https://www.typescriptlang.org/)
-
 A robust TypeScript implementation of JSON Patch ([RFC 6902](https://tools.ietf.org/html/rfc6902)) with additional features for efficient diffing, patching, and patch inversion.
 
 ## Features
@@ -17,8 +11,8 @@ A robust TypeScript implementation of JSON Patch ([RFC 6902](https://tools.ietf.
 - 🎯 Targeted array operations with LCS algorithm
 - 💪 Strong TypeScript types
 - 🛡️ Comprehensive error handling
-- 🔄 Circular reference detection
-- 🔙 Automatic rollback on failed patches
+- 🔍 Circular reference detection
+- ⏮️ Automatic rollback on failed patches
 
 ## Installation
 
@@ -53,20 +47,12 @@ DeltaSculptor.applyPatch(oldObj, patch);
 console.log(oldObj); // { a: 1, b: 3, c: 4 }
 ```
 
-### Immutable Operations
+### Advanced Array Operations
+
+The library provides sophisticated array handling capabilities designed to generate efficient and safe patches:
 
 ```typescript
-const original = { a: 1, b: { c: 2 } };
-const patch = [{ op: 'replace', path: '/b/c', value: 3 }];
-
-const result = DeltaSculptor.applyPatchImmutable(original, patch);
-console.log(original); // { a: 1, b: { c: 2 } }
-console.log(result); // { a: 1, b: { c: 3 } }
-```
-
-### Move Detection
-
-```typescript
+// Move Detection
 const oldArray = [1, 2, 3, 4];
 const newArray = [4, 2, 3, 1];
 
@@ -78,6 +64,78 @@ console.log(patch);
 //   { op: 'move', from: '/3', path: '/0' },
 //   { op: 'move', from: '/0', path: '/3' }
 // ]
+
+// Batch Operations
+const source = [1, 2, 3, 4, 5];
+const target = [1, 6, 7, 8, 5];
+
+const patch = DeltaSculptor.createPatch(source, target, {
+  batchArrayOps: true,
+  maxBatchSize: 5, // Optional limit on batch size (experimental)
+});
+console.log(patch);
+// [
+//   { op: 'remove', path: '/1', count: 3 },
+//   { op: 'add', path: '/1', value: [6, 7, 8] }
+// ]
+
+// Complex Array Transformations
+const oldArray = ['a', 'b', 'c', 'd', 'e'];
+const newArray = ['e', 'c', 'x', 'y', 'b'];
+
+const patch = DeltaSculptor.createPatch(oldArray, newArray, {
+  detectMove: true,
+  batchArrayOps: true,
+});
+console.log(patch);
+// [
+//   { op: 'move', from: '/4', path: '/0' }, // Move 'e' to front
+//   { op: 'move', from: '/2', path: '/1' }, // Move 'c' after 'e'
+//   { op: 'remove', path: '/2', count: 2 }, // Remove 'd' and original position of 'b'
+//   { op: 'add', path: '/2', value: ['x', 'y'] }, // Add new elements
+//   { op: 'move', from: '/1', path: '/4' } // Move 'b' to end
+// ]
+```
+
+#### Array Operation Features
+
+- **Intelligent Move Detection**
+
+  - Automatically detects element movements within arrays
+  - Converts remove+add pairs into efficient move operations
+  - Handles multiple moves with optimal sequencing
+  - Preserves array element identity
+
+- **Batch Operations**
+
+  - Combines sequential operations for efficiency:
+    - Multiple removes become a single remove with count
+    - Sequential adds become a single add with array value
+  - Configurable batch sizes for fine-grained control
+  - Automatic optimization of operation sequences
+
+- **Safety and Validation**
+
+  - Array index bounds checking
+  - Path validation for array operations
+  - Circular reference detection in arrays
+  - Automatic rollback on failed array operations
+
+- **Operation Optimization**
+  - LCS (Longest Common Subsequence) algorithm for minimal diffs
+  - Smart grouping of array operations
+  - Efficient handling of large array transformations
+  - Memory-efficient batch processing
+
+### Immutable Operations
+
+```typescript
+const original = { a: 1, b: { c: 2 } };
+const patch = [{ op: 'replace', path: '/b/c', value: 3 }];
+
+const result = DeltaSculptor.applyPatchImmutable(original, patch);
+console.log(original); // { a: 1, b: { c: 2 } }
+console.log(result); // { a: 1, b: { c: 3 } }
 ```
 
 ### Inverse Patch Generation
@@ -125,6 +183,7 @@ Options:
 
 - `detectMove?: boolean` - Enable move operation detection
 - `batchArrayOps?: boolean` - Batch sequential array operations
+- `maxBatchSize?: number` - Maximum size for batched operations
 - `maxDepth?: number` - Maximum recursion depth
 
 #### `applyPatch(target: any, patch: JsonPatch, options?: PatchOptions): void`
