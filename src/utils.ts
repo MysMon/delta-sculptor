@@ -1,138 +1,140 @@
+import { JsonPointer } from './types';
+
 /**
- * JSON Pointer (RFC 6901) におけるパスセグメントエスケープ
- * ~ -> ~0
- * / -> ~1
+ * Escapes a JSON Pointer segment according to RFC 6901
  */
 export function escapePointerSegment(segment: string): string {
   return segment.replace(/~/g, '~0').replace(/\//g, '~1');
 }
 
 /**
- * JSON Pointer (RFC 6901) におけるパスセグメントアンエスケープ
- * ~1 -> /
- * ~0 -> ~
+ * Unescapes a JSON Pointer segment according to RFC 6901
  */
 export function unescapePointerSegment(segment: string): string {
   return segment.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
 /**
- * JSON Pointer の文字列をセグメント配列に変換
- * 例: "/foo/0/bar" -> ["foo", "0", "bar"]
- * ルート "/" -> [] (空配列)
+ * Builds a JSON Pointer from segments
  */
-export function parsePointer(path: string): string[] {
-  if (path === '') {
-    // 空文字はルートを示す
-    return [];
-  }
-  if (!path.startsWith('/')) {
-    throw new Error(`Invalid JSON Pointer: must begin with "/". got: ${path}`);
-  }
-  // 先頭の "/" を除いたあと "/" で split
-  const segments = path.substring(1).split('/').map(unescapePointerSegment);
-  return segments;
+export function buildPointer(segments: string[]): JsonPointer {
+  if (segments.length === 0) return '';
+  return '/' + segments.map(escapePointerSegment).join('/');
 }
 
 /**
- * obj から JSON Pointer (path) に従って値を取得する
- * 存在しない場合は undefined を返す
+ * Parses a JSON Pointer into segments
  */
-export function getValueByPointer(obj: any, path: string): any {
-  const segments = parsePointer(path);
+export function parsePointer(pointer: JsonPointer): string[] {
+  if (pointer === '') return [];
+  return pointer.slice(1).split('/').map(unescapePointerSegment);
+}
+
+/**
+ * Checks if a path points to an array element
+ */
+export function isArrayPath(path: string): boolean {
+  // Array paths end with a number or '-'
+  const lastSegment = parsePointer(path).pop();
+  return lastSegment === '-' || /^\d+$/.test(lastSegment ?? '');
+}
+
+/**
+ * Gets a value from an object using a JSON Pointer (RFC 6901)
+ */
+export function getValueByPointer(obj: any, pointer: JsonPointer): any {
+  if (pointer === '') return obj;
+
+  const segments = parsePointer(pointer);
   let current = obj;
-  for (const seg of segments) {
-    if (current == null) {
-      return undefined;
-    }
-    current = current[seg];
+
+  for (const segment of segments) {
+    if (current === undefined) return undefined;
+    current = current[segment];
   }
+
   return current;
 }
 
 /**
- * obj の JSON Pointer (path) の位置に value を設定 (既存値を上書き)
- * - add, replace に使われる
- * - path が配列の index や '-' (末尾) の場合も考慮
+ * Sets a value in an object using a JSON Pointer (RFC 6901)
  */
-export function setValueByPointer(obj: any, path: string, value: any): void {
-  const segments = parsePointer(path);
-  if (segments.length === 0) {
-    // ルート（obj 全体）を差し替える場合
-    // JavaScript では参照を置き換えるだけでは呼び出し元のスコープに影響しない
-    // ここではエラーにしておく。どうしてもやりたければ呼び出し側で調整。
-    throw new Error('Cannot set the root object itself using JSON Pointer');
-  }
-
+export function setValueByPointer(
+  obj: any,
+  pointer: JsonPointer,
+  value: any
+): void {
+  const segments = parsePointer(pointer);
   let current = obj;
-  for (let i = 0; i < segments.length - 1; i++) {
-    const seg = segments[i];
-    if (current[seg] === undefined) {
-      // 次が数字なら配列、そうでなければオブジェクトを作る(簡易実装)
-      const nextSeg = segments[i + 1];
-      current[seg] = /^\d+$/.test(nextSeg) ? [] : {};
-    }
-    current = current[seg];
-  }
-  const lastSeg = segments[segments.length - 1];
 
+  for (let i = 0; i < segments.length - 1; i++) {
+    const segment = segments[i];
+    if (!(segment in current)) {
+      // Create objects/arrays as needed
+      const nextSegment = segments[i + 1];
+      current[segment] = /^\d+$/.test(nextSegment) ? [] : {};
+    }
+    current = current[segment];
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment === '-' && Array.isArray(current)) {
+    current.push(value);
+  } else {
+    current[lastSegment] = value;
+  }
+}
+
+/**
+ * Removes a value from an object using a JSON Pointer (RFC 6901)
+ */
+export function removeByPointer(obj: any, pointer: JsonPointer): void {
+  if (pointer === '') {
+    throw new Error('Cannot remove root object');
+  }
+
+  const segments = parsePointer(pointer);
+  let current = obj;
+
+  for (let i = 0; i < segments.length - 1; i++) {
+    const segment = segments[i];
+    if (current[segment] === undefined) return;
+    current = current[segment];
+  }
+
+  const lastSegment = segments[segments.length - 1];
   if (Array.isArray(current)) {
-    // 配列への add
-    if (lastSeg === '-') {
-      // 末尾に追加
-      current.push(value);
+    if (lastSegment === '-') {
+      current.pop();
     } else {
-      const index = parseInt(lastSeg, 10);
-      if (Number.isNaN(index)) {
-        throw new Error(`Invalid array index: ${lastSeg}`);
+      const index = parseInt(lastSegment, 10);
+      if (!isNaN(index)) {
+        current.splice(index, 1);
       }
-      current[index] = value;
     }
   } else {
-    // オブジェクトへの追加 or 置換
-    current[lastSeg] = value;
+    delete current[lastSegment];
   }
 }
 
 /**
- * obj の JSON Pointer (path) にある値を削除し、その「削除前の値」を返す
- * - remove に使われる
+ * Legacy alias for removeByPointer for backward compatibility
+ * @deprecated Use removeByPointer instead
  */
-export function removeValueByPointer(obj: any, path: string): any {
-  const segments = parsePointer(path);
-  if (segments.length === 0) {
-    throw new Error('Cannot remove the entire root object');
-  }
-
-  let current = obj;
-  for (let i = 0; i < segments.length - 1; i++) {
-    const seg = segments[i];
-    if (current[seg] === undefined) {
-      return undefined; // 削除対象がそもそもない
-    }
-    current = current[seg];
-  }
-  const lastSeg = segments[segments.length - 1];
-
-  if (Array.isArray(current)) {
-    const index = lastSeg === '-' ? current.length - 1 : parseInt(lastSeg, 10);
-    if (index < 0 || index >= current.length) {
-      return undefined; // 範囲外
-    }
-    const removed = current[index];
-    current.splice(index, 1);
-    return removed;
-  } else {
-    const removed = current[lastSeg];
-    delete current[lastSeg];
-    return removed;
-  }
-}
+export const removeValueByPointer = removeByPointer;
 
 /**
- * JSON Pointer 文字列を組み立てるための簡易ヘルパー
- * segments をエスケープして "/" で連結
+ * Checks if an object contains circular references
  */
-export function buildPointer(segments: string[]): string {
-  return '/' + segments.map(escapePointerSegment).join('/');
+export function hasCircularReferences(obj: any, seen = new Set()): boolean {
+  if (obj === null || typeof obj !== 'object') return false;
+  if (seen.has(obj)) return true;
+
+  seen.add(obj);
+  for (const value of Object.values(obj)) {
+    if (hasCircularReferences(value, seen)) return true;
+  }
+  seen.delete(obj);
+
+  return false;
 }
