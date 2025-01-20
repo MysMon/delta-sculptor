@@ -1,54 +1,146 @@
+import { optimizeArrayOperations } from './array-utils';
 import { PatchError, PatchErrorCode } from './errors';
-import { applyOperation } from './patch';
-import { JsonPatch, JsonPatchOperation } from './types';
+import { applyOperation, PatchOptions } from './patch';
+import { JsonPatch, JsonPatchOperation, Patchable } from './types';
 import { getValueByPointer } from './utils';
-import { deepClone } from './validate';
+import { deepClone, validatePatch, validateJsonPointer } from './validate';
+
+/**
+ * Map of operation types to their inverse operations
+ */
+const INVERSE_OPS = {
+  add: 'remove',
+  remove: 'add',
+  replace: 'replace',
+  move: 'move',
+  copy: null, // copy operation doesn't need to be reversed
+  test: null, // test operation doesn't need to be reversed
+} as const;
+
+export interface InversePatchOptions extends PatchOptions {
+  /**
+   * Whether to validate the inverse patch before returning
+   */
+  validateInverse?: boolean;
+
+  /**
+   * Whether to optimize array operations by combining sequential operations
+   */
+  batchArrayOps?: boolean;
+
+  /**
+   * Maximum size of batched array operations
+   */
+  maxBatchSize?: number;
+}
+
+const defaultOptions: Required<InversePatchOptions> = {
+  validate: true,
+  checkCircular: true,
+  maxDepth: 100,
+  validateInverse: true,
+  batchArrayOps: true,
+  maxBatchSize: Infinity,
+};
+
+/**
+ * Validates a patch operation and its path
+ */
+function validateOperation(op: JsonPatchOperation): void {
+  if (!op.op || !(op.op in INVERSE_OPS)) {
+    throw new PatchError(
+      PatchErrorCode.INVALID_OPERATION,
+      `Invalid operation type: ${op.op}`
+    );
+  }
+
+  if (!op.path) {
+    throw new PatchError(
+      PatchErrorCode.MISSING_REQUIRED_FIELD,
+      'Path is required'
+    );
+  }
+
+  validateJsonPointer(op.path);
+
+  if (op.op === 'move' && !op.from) {
+    throw new PatchError(
+      PatchErrorCode.MISSING_REQUIRED_FIELD,
+      'Move operation requires "from" field'
+    );
+  }
+}
 
 /**
  * Creates an inverse patch that will undo the effects of the original patch
  */
-export function createInversePatch(
-  originalObj: any,
-  patch: JsonPatch
+export function createInversePatch<T extends Patchable>(
+  originalObj: T,
+  patch: JsonPatch,
+  options: InversePatchOptions = {}
 ): JsonPatch {
-  const inverse: JsonPatch = [];
+  const opts = { ...defaultOptions, ...options };
+
+  if (opts.validate) {
+    validatePatch(patch);
+  }
+
   const tempObj = deepClone(originalObj);
+  let inversePatch: JsonPatch = [];
 
-  // Apply each operation and build inverse patch
-  for (const op of patch) {
+  // Create inverse operations in reverse order
+  for (let i = patch.length - 1; i >= 0; i--) {
+    const op = patch[i];
+    validateOperation(op);
+
+    const inversedOp = createInverseOperation(tempObj, op);
+    if (inversedOp) {
+      inversePatch.push(inversedOp);
+    }
+
     try {
-      // Get inverse operation before applying the original
-      const inversedOp = createInverseOperation(tempObj, op);
-      if (inversedOp) {
-        inverse.unshift(inversedOp);
-      }
-
-      // Apply the original operation to maintain correct state
-      applyOperation(tempObj, op);
+      applyOperation(tempObj, op, opts);
     } catch (error) {
-      // If operation fails, roll back by applying accumulated inverse
-      if (inverse.length > 0) {
-        const tempOrig = deepClone(originalObj);
-        for (let i = inverse.length - 1; i >= 0; i--) {
-          applyOperation(tempOrig, inverse[i]);
-        }
-      }
-      throw error;
+      // If operation fails, we don't need to rollback since we're working on a clone
+      throw new PatchError(
+        PatchErrorCode.INVALID_OPERATION,
+        `Failed to apply operation: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 
-  return inverse;
+  // Optimize the inverse patch if needed
+  if (opts.batchArrayOps) {
+    inversePatch = optimizeArrayOperations(inversePatch);
+  }
+
+  if (opts.validateInverse) {
+    validatePatch(inversePatch);
+  }
+
+  return inversePatch;
 }
 
-function safeGetValue(obj: any, path: string): any {
-  const value = getValueByPointer(obj, path);
-  if (value === undefined) {
+/**
+ * Safely retrieves a value from an object using a JSON pointer.
+ * Throws a detailed error if the path is invalid or value doesn't exist.
+ */
+function safeGetValue<T extends Patchable>(obj: T, path: string): any {
+  try {
+    const value = getValueByPointer(obj, path);
+    if (value === undefined) {
+      throw new PatchError(
+        PatchErrorCode.INVALID_POINTER,
+        `No value exists at path: ${path}`
+      );
+    }
+    return value;
+  } catch (error) {
     throw new PatchError(
       PatchErrorCode.INVALID_POINTER,
-      `Cannot find value at path: ${path}`
+      error instanceof Error ? error.message : `Invalid path: ${path}`
     );
   }
-  return value;
 }
 
 function handleBatchRemoveInverse(
@@ -178,15 +270,22 @@ function createInverseOperation(
  */
 export function applyPatchWithInverse(
   target: any,
-  patch: JsonPatch
+  patch: JsonPatch,
+  options: InversePatchOptions = {}
 ): JsonPatch {
-  const inverse = createInversePatch(target, patch);
+  const opts = { ...defaultOptions, ...options };
+
+  if (opts.validate) {
+    validatePatch(patch);
+  }
+
+  const inverse = createInversePatch(target, patch, opts);
   const tempTarget = deepClone(target);
 
   try {
     // Apply the original patch
     for (const op of patch) {
-      applyOperation(tempTarget, op);
+      applyOperation(tempTarget, op, opts);
     }
 
     // Copy changes back to original target
