@@ -1,86 +1,169 @@
-# DeltaSculptor
+# Delta Sculptor
 
-DeltaSculptor is a TypeScript library for generating and applying [JSON Patch](https://www.rfc-editor.org/rfc/rfc6902) operations. It provides functionalities to create patches between objects, apply patches in both destructive and immutable ways, generate inverse patches for rollback, and more.
+[![npm version](https://badge.fury.io/js/delta-sculptor.svg)](https://badge.fury.io/js/delta-sculptor)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-blue.svg)](https://www.typescriptlang.org/)
 
-## Table of Contents
+A robust TypeScript implementation of JSON Patch ([RFC 6902](https://tools.ietf.org/html/rfc6902)) with additional features for efficient diffing, patching, and patch inversion.
 
-- Installation
-- Usage
-  - Creating a Patch
-  - Applying a Patch
-  - Generating an Inverse Patch
-- API Reference
-- Contributing
-- License
+## Features
+
+- 🔄 Full JSON Patch (RFC 6902) compliance
+- 🔍 Efficient diff generation with move detection
+- 🔒 Immutable operations support
+- ↩️ Inverse patch generation for undo operations
+- 🎯 Targeted array operations with LCS algorithm
+- 💪 Strong TypeScript types
+- 🛡️ Comprehensive error handling
+- 🔄 Circular reference detection
+- 🔙 Automatic rollback on failed patches
 
 ## Installation
 
-Ensure you have [pnpm](https://pnpm.io/) installed, then install the dependencies:
-
-```sh
-pnpm install
+```bash
+npm install delta-sculptor
+# or
+yarn add delta-sculptor
+# or
+pnpm add delta-sculptor
 ```
 
 ## Usage
 
-### Creating a Patch
+### Basic Example
 
-Use the DeltaSculptor.createPatch method to generate a JSON Patch between two objects.
+```typescript
+import { DeltaSculptor } from 'delta-sculptor';
 
-```ts
-import { DeltaSculptor } from "delta-sculptor";
+// Generate a patch
+const oldObj = { a: 1, b: 2 };
+const newObj = { a: 1, b: 3, c: 4 };
 
-const original = { foo: "bar", items: [1, 2, 3] };
-const updated = { foo: "baz", items: [1, 3, 4] };
-
-const patch = DeltaSculptor.createPatch(original, updated);
+const patch = DeltaSculptor.createPatch(oldObj, newObj);
 console.log(patch);
+// [
+//   { op: 'replace', path: '/b', value: 3 },
+//   { op: 'add', path: '/c', value: 4 }
+// ]
+
+// Apply the patch
+DeltaSculptor.applyPatch(oldObj, patch);
+console.log(oldObj); // { a: 1, b: 3, c: 4 }
 ```
 
-### Applying a Patch
+### Immutable Operations
 
-Apply the generated patch to an object destructively using DeltaSculptor.applyPatch:
+```typescript
+const original = { a: 1, b: { c: 2 } };
+const patch = [{ op: 'replace', path: '/b/c', value: 3 }];
 
-```ts
-DeltaSculptor.applyPatch(original, patch);
-console.log(original); // { foo: "baz", items: [1, 3, 4] }
+const result = DeltaSculptor.applyPatchImmutable(original, patch);
+console.log(original); // { a: 1, b: { c: 2 } }
+console.log(result);   // { a: 1, b: { c: 3 } }
 ```
 
-Or apply it immutably using DeltaSculptor.applyPatchImmutable:
+### Move Detection
 
-```ts
-const newObj = DeltaSculptor.applyPatchImmutable(original, patch);
-console.log(newObj); // { foo: "baz", items: [1, 3, 4] }
+```typescript
+const oldArray = [1, 2, 3, 4];
+const newArray = [4, 2, 3, 1];
+
+const patch = DeltaSculptor.createPatch(oldArray, newArray, { detectMove: true });
+console.log(patch);
+// [
+//   { op: 'move', from: '/3', path: '/0' },
+//   { op: 'move', from: '/0', path: '/3' }
+// ]
 ```
 
-### Generating an Inverse Patch
+### Inverse Patch Generation
 
-Create an inverse patch to rollback changes using DeltaSculptor.generateInversePatch:
+```typescript
+const obj = { a: 1, b: 2 };
+const patch = [
+  { op: 'replace', path: '/a', value: 3 },
+  { op: 'remove', path: '/b' }
+];
 
-```ts
-const inversePatch = DeltaSculptor.generateInversePatch(original, patch);
-DeltaSculptor.applyInversePatch(original, inversePatch);
-console.log(original); // Reverted to original state
+const inversePatch = DeltaSculptor.applyPatchWithInverse(obj, patch);
+console.log(obj); // { a: 3 }
+
+// Undo changes by applying inverse patch
+DeltaSculptor.applyPatch(obj, inversePatch);
+console.log(obj); // { a: 1, b: 2 }
+```
+
+### Safe Patching with Rollback
+
+```typescript
+const obj = { a: 1 };
+const patch = [
+  { op: 'replace', path: '/a', value: 2 },
+  { op: 'replace', path: '/nonexistent', value: 3 } // This will fail
+];
+
+try {
+  DeltaSculptor.applyPatchWithRollback(obj, patch);
+} catch (error) {
+  console.log(obj); // { a: 1 } - Original state is preserved
+}
 ```
 
 ## API Reference
 
 ### DeltaSculptor
 
-A class providing static methods to work with JSON Patches.
+#### `createPatch(oldObj: any, newObj: any, options?: CreateDiffOptions): JsonPatch`
 
-- `createPatch(oldObj, newObj, options?`: Generates a JSON Patch representing the differences between oldObj and newObj.
-- `applyPatch(target, patch)`: Applies a patch destructively to the target object.
-- `applyPatchImmutable(target, patch)`: Applies a patch immutably, returning a new object.
-- `applyPatchWithInverse(target, patch)`: Applies a patch and returns the inverse patch.
-- `applyInversePatch(target, inversePatch)`: Applies an inverse patch to rollback changes.
-- `generateInversePatch(prePatchObj, patch)`: Generates an inverse patch based on the pre-patch object.
-- `applyPatchWithRollback(target, patch)`: Applies a patch with rollback capability in case of failure.
+Generates a JSON Patch that transforms `oldObj` into `newObj`.
 
-## Contributing
+Options:
+- `detectMove?: boolean` - Enable move operation detection
+- `batchArrayOps?: boolean` - Batch sequential array operations
+- `maxDepth?: number` - Maximum recursion depth
 
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or features.
+#### `applyPatch(target: any, patch: JsonPatch, options?: PatchOptions): void`
+
+Applies a patch to the target object, modifying it in place.
+
+#### `applyPatchImmutable<T>(target: T, patch: JsonPatch, options?: PatchOptions): T`
+
+Applies a patch and returns a new object, leaving the original unchanged.
+
+#### `applyPatchWithRollback<T extends object>(target: T, patch: JsonPatch, options?: PatchOptions): void`
+
+Applies a patch with automatic rollback on failure.
+
+#### `applyPatchWithInverse(obj: any, patch: JsonPatch, options?: InversePatchOptions): JsonPatch`
+
+Applies a patch and returns an inverse patch that can undo the changes.
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run tests
+npm test
+
+# Run tests with coverage
+npm run test:coverage
+
+# Build
+npm run build
+
+# Lint
+npm run lint
+
+# Format
+npm run format
+```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT © [Your Name]
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
