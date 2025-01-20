@@ -1,60 +1,115 @@
 import { PatchError, PatchErrorCode } from './errors';
-import { JsonPatch, JsonPatchOperation } from './types';
+import { JsonPatch, JsonPatchOperation, JsonPointer, Patchable } from './types';
+import { parsePointer } from './utils';
 
 /**
- * Validates a JSON Pointer string according to RFC 6901
+ * Type guard for JsonPatchOperation
  */
-export function validateJsonPointer(pointer: string): void {
-  if (pointer === '') return; // Empty string is valid (root reference)
+function isJsonPatchOperation(op: any): op is JsonPatchOperation {
+  return (
+    op &&
+    typeof op === 'object' &&
+    'op' in op &&
+    typeof op.op === 'string' &&
+    ['add', 'remove', 'replace', 'move', 'copy', 'test'].includes(op.op)
+  );
+}
 
-  if (!pointer.startsWith('/')) {
-    throw PatchError.invalidPointer(pointer);
+/**
+ * Validates a JSON Pointer according to RFC 6901
+ */
+export function validateJsonPointer(pointer: JsonPointer): void {
+  if (typeof pointer !== 'string') {
+    throw new PatchError(
+      PatchErrorCode.INVALID_POINTER,
+      'Path must be a string'
+    );
   }
 
-  // Check for invalid escape sequences
-  const segments = pointer.split('/').slice(1);
-  for (const segment of segments) {
-    // Check for invalid escape sequences
-    let i = 0;
-    while (i < segment.length) {
-      if (segment[i] === '~') {
-        if (i + 1 >= segment.length || !'01'.includes(segment[i + 1])) {
-          throw PatchError.invalidPointer(pointer);
-        }
-        i += 2;
-      } else {
-        i++;
-      }
-    }
+  if (pointer.length > 0 && !pointer.startsWith('/')) {
+    throw new PatchError(
+      PatchErrorCode.INVALID_POINTER,
+      'Path must start with /'
+    );
   }
+
+  try {
+    parsePointer(pointer);
+  } catch (error) {
+    throw new PatchError(
+      PatchErrorCode.INVALID_POINTER,
+      `Invalid pointer syntax: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
+ * Legacy alias for validateJsonPointer
+ * @deprecated Use validateJsonPointer instead
+ */
+export const validatePath = validateJsonPointer;
+
+/**
+ * Creates a deep clone of an object, handling circular references
+ */
+export function deepClone<T>(obj: T, seen = new WeakMap<object, any>()): T {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+
+  if (seen.has(obj as object)) {
+    throw new PatchError(
+      PatchErrorCode.CIRCULAR_REFERENCE,
+      'Circular reference detected'
+    );
+  }
+
+  seen.set(obj as object, true);
+
+  const result = Array.isArray(obj)
+    ? []
+    : Object.create(Object.getPrototypeOf(obj));
+
+  for (const [key, value] of Object.entries(obj)) {
+    result[key] = deepClone(value, seen);
+  }
+
+  seen.delete(obj as object);
+  return result;
 }
 
 /**
  * Detects circular references in an object
  */
-export function detectCircular(obj: any, seen = new WeakSet()): boolean {
-  // Handle primitive types
+export function detectCircular(
+  obj: any,
+  seen = new WeakSet(),
+  path = ''
+): string | null {
   if (obj === null || typeof obj !== 'object') {
-    return false;
+    return null;
   }
 
-  // Check for circular reference
   if (seen.has(obj)) {
-    return true;
+    return path;
   }
+
   seen.add(obj);
 
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    return obj.some(item => detectCircular(item, seen));
+  for (const [key, value] of Object.entries(obj)) {
+    const nextPath = path ? `${path}/${key}` : key;
+    const circularPath = detectCircular(value, seen, nextPath);
+    if (circularPath) {
+      return circularPath;
+    }
   }
 
-  // Handle objects
-  return Object.values(obj).some(value => detectCircular(value, seen));
+  seen.delete(obj);
+  return null;
 }
 
 /**
- * Validates maximum recursion depth
+ * Validates maximum depth of an object
  */
 export function validateMaxDepth(
   obj: any,
@@ -63,140 +118,130 @@ export function validateMaxDepth(
 ): void {
   if (currentDepth > maxDepth) {
     throw new PatchError(
-      PatchErrorCode.TYPE_MISMATCH,
-      `Maximum depth exceeded: ${maxDepth}`
+      PatchErrorCode.MAX_DEPTH_EXCEEDED,
+      `Maximum depth of ${maxDepth} exceeded`,
+      '/'
     );
   }
 
-  if (obj && typeof obj === 'object') {
-    if (Array.isArray(obj)) {
-      obj.forEach(item => validateMaxDepth(item, maxDepth, currentDepth + 1));
-    } else {
-      Object.values(obj).forEach(value =>
-        validateMaxDepth(value, maxDepth, currentDepth + 1)
-      );
+  if (obj !== null && typeof obj === 'object') {
+    for (const value of Object.values(obj)) {
+      validateMaxDepth(value, maxDepth, currentDepth + 1);
     }
   }
 }
 
 /**
- * Performs a deep equality comparison without using JSON.stringify
+ * Deep equality comparison
  */
-export function deepEqual(
-  a: any,
-  b: any,
-  seen = new WeakMap<object, any>()
-): boolean {
-  // Handle primitive types and null/undefined
-  if (a === b) return true;
-  if (a == null || b == null) return false;
-  if (typeof a !== 'object' || typeof b !== 'object') return false;
-
-  // Check for circular references
-  if (seen.has(a)) {
-    return seen.get(a) === b;
-  }
-  seen.set(a, b);
-
-  // Handle arrays
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    return a.every((val, i) => deepEqual(val, b[i], seen));
+export function deepEqual(a: any, b: any): boolean {
+  if (a === b) {
+    return true;
   }
 
-  // Handle objects
-  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+  if (
+    a === null ||
+    b === null ||
+    typeof a !== 'object' ||
+    typeof b !== 'object'
+  ) {
+    return false;
+  }
 
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
 
-  if (keysA.length !== keysB.length) return false;
+  if (keysA.length !== keysB.length) {
+    return false;
+  }
 
-  return keysA.every(
-    key => keysB.includes(key) && deepEqual(a[key], b[key], seen)
-  );
+  return keysA.every(key => keysB.includes(key) && deepEqual(a[key], b[key]));
 }
 
 /**
- * Creates a deep clone while handling circular references
+ * Validates a patch operation
  */
-export function deepClone<T>(obj: T, seen = new WeakMap<object, any>()): T {
-  // Handle primitive types and null/undefined
-  if (obj === null || typeof obj !== 'object') {
-    return obj;
+function validateOperation(op: JsonPatchOperation): void {
+  if (!isJsonPatchOperation(op)) {
+    throw new PatchError(
+      PatchErrorCode.INVALID_OPERATION,
+      'Operation must be a valid JSON Patch operation'
+    );
   }
 
-  // Handle circular references
-  if (seen.has(obj as object)) {
-    return seen.get(obj as object);
+  if (!op.path && op.op !== 'test') {
+    throw new PatchError(
+      PatchErrorCode.MISSING_REQUIRED_FIELD,
+      `${op.op} operation must have a "path" field`
+    );
   }
 
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    const clone: any[] = [];
-    seen.set(obj, clone);
-    clone.push(...obj.map(item => deepClone(item, seen)));
-    return clone as unknown as T;
+  if (op.path) {
+    validateJsonPointer(op.path);
   }
 
-  // Handle objects
-  const clone = Object.create(Object.getPrototypeOf(obj));
-  seen.set(obj as object, clone);
+  switch (op.op) {
+    case 'add':
+    case 'replace':
+    case 'test':
+      if (!('value' in op)) {
+        throw new PatchError(
+          PatchErrorCode.MISSING_REQUIRED_FIELD,
+          `${op.op} operation must have a "value" field`
+        );
+      }
+      break;
 
-  Object.entries(obj as object).forEach(([key, value]) => {
-    clone[key] = deepClone(value, seen);
-  });
+    case 'move':
+    case 'copy':
+      if (!op.from) {
+        throw new PatchError(
+          PatchErrorCode.MISSING_REQUIRED_FIELD,
+          `${op.op} operation must have a "from" field`
+        );
+      }
+      validateJsonPointer(op.from);
+      break;
 
-  return clone;
+    case 'remove':
+      // Remove operation only needs a path, which we've already validated
+      break;
+  }
 }
 
 /**
- * Validates a JSON Patch document according to RFC 6902
+ * Validates an entire JSON Patch
  */
 export function validatePatch(patch: JsonPatch): void {
   if (!Array.isArray(patch)) {
     throw new PatchError(
-      PatchErrorCode.INVALID_OPERATION,
-      'A JSON Patch document must be an array of operations'
+      PatchErrorCode.INVALID_PATCH,
+      'Patch must be an array'
     );
   }
 
   patch.forEach((op, index) => {
-    if (!op.op) {
+    try {
+      validateOperation(op);
+    } catch (error) {
       throw new PatchError(
-        PatchErrorCode.MISSING_REQUIRED_FIELD,
-        `Operation ${index} is missing the required 'op' field`
+        error instanceof PatchError
+          ? error.code
+          : PatchErrorCode.INVALID_OPERATION,
+        `Invalid operation at index ${index}: ${error instanceof Error ? error.message : String(error)}`
       );
-    }
-
-    if (!op.path) {
-      throw new PatchError(
-        PatchErrorCode.MISSING_REQUIRED_FIELD,
-        `Operation ${index} is missing the required 'path' field`
-      );
-    }
-
-    validateJsonPointer(op.path);
-
-    switch (op.op) {
-      case 'add':
-      case 'replace':
-      case 'test':
-        if ('value' in op === false) {
-          throw PatchError.missingField(op.op, 'value');
-        }
-        break;
-      case 'move':
-      case 'copy':
-        if (!op.from) {
-          throw PatchError.missingField(op.op, 'from');
-        }
-        validateJsonPointer(op.from);
-        break;
-      case 'remove':
-        break;
-      default:
-        throw PatchError.invalidOperation((op as JsonPatchOperation).op);
     }
   });
+}
+
+/**
+ * Validates an object to ensure it can be patched
+ */
+export function validatePatchTarget(obj: any): asserts obj is Patchable {
+  if (obj === null || typeof obj !== 'object') {
+    throw new PatchError(
+      PatchErrorCode.INVALID_TARGET,
+      'Patch target must be an object or array'
+    );
+  }
 }
