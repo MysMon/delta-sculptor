@@ -7,6 +7,7 @@ import {
   generateArrayOperations,
 } from '../array-utils';
 import { PatchError } from '../errors';
+import { JsonPatch } from '../types';
 
 describe('validateArrayIndex', () => {
   test('validates valid indices', () => {
@@ -27,58 +28,49 @@ describe('validateArrayIndex', () => {
 
 describe('optimizeArrayOperations', () => {
   test('converts remove+add into move operations', () => {
-    const operations = [
-      { type: 'remove' as const, index: 1, value: 'b' },
-      { type: 'add' as const, index: 2, value: 'b' },
+    const patch: JsonPatch = [
+      { op: 'remove', path: '/1' },
+      { op: 'add', path: '/2', value: 'b' },
     ];
 
-    const optimized = optimizeArrayOperations(operations);
-    expect(optimized).toEqual([{ type: 'move', index: 2, fromIndex: 1 }]);
+    const optimized = optimizeArrayOperations(patch);
+    expect(optimized).toEqual([{ op: 'move', path: '/2', from: '/1' }]);
   });
 
   test('preserves non-optimizable operations', () => {
-    const operations = [
-      { type: 'add' as const, index: 0, value: 'a' },
-      { type: 'remove' as const, index: 2 },
+    const patch: JsonPatch = [
+      { op: 'add', path: '/0', value: 'a' },
+      { op: 'remove', path: '/2' },
     ];
 
-    const optimized = optimizeArrayOperations(operations);
-    expect(optimized).toEqual(operations);
+    const optimized = optimizeArrayOperations(patch);
+    expect(optimized).toEqual(patch);
   });
 });
 
 describe('batchArrayOperations', () => {
   test('batches sequential add operations', () => {
-    const operations = [
-      { type: 'add' as const, index: 0, value: 'a' },
-      { type: 'add' as const, index: 1, value: 'b' },
-      { type: 'add' as const, index: 2, value: 'c' },
-    ];
-
-    const result = batchArrayOperations(operations);
-    expect(result).toEqual([{ op: 'add', path: '/0', value: ['a', 'b', 'c'] }]);
+    const operations = batchArrayOperations(
+      generateArrayOperations(['a', 'b', 'c'], [])
+    );
+    expect(operations).toEqual([
+      { op: 'add', path: '/0', value: ['a', 'b', 'c'] },
+    ]);
   });
 
   test('batches sequential remove operations', () => {
-    const operations = [
-      { type: 'remove' as const, index: 2 },
-      { type: 'remove' as const, index: 1 },
-      { type: 'remove' as const, index: 0 },
-    ];
-
-    const result = batchArrayOperations(operations);
-    expect(result).toEqual([{ op: 'remove', path: '/0', count: 3 }]);
+    const operations = batchArrayOperations(
+      generateArrayOperations(['a', 'b', 'c'], [])
+    );
+    expect(operations).toEqual([{ op: 'remove', path: '/0', count: 3 }]);
   });
 
   test('respects maxBatchSize', () => {
-    const operations = Array(5).fill({
-      type: 'add' as const,
-      index: 0,
-      value: 'x',
-    });
-
-    const result = batchArrayOperations(operations, 2);
-    expect(result.length).toBeGreaterThan(1);
+    const operations = batchArrayOperations(
+      generateArrayOperations([], Array(5).fill('x')),
+      2
+    );
+    expect(operations.length).toBeGreaterThan(1);
   });
 });
 
@@ -87,10 +79,10 @@ describe('generateArrayOperations', () => {
     const oldArr = ['a', 'b', 'c'];
     const newArr = ['a', 'd', 'c'];
 
-    const operations = generateArrayOperations(oldArr, newArr);
-    expect(operations).toEqual([
-      { type: 'remove' as const, index: 1, value: 'b' },
-      { type: 'add' as const, index: 1, value: 'd' },
+    const patch = batchArrayOperations(generateArrayOperations(oldArr, newArr));
+    expect(patch).toEqual([
+      { op: 'remove', path: '/1' },
+      { op: 'add', path: '/1', value: 'd' },
     ]);
   });
 
@@ -99,17 +91,56 @@ describe('generateArrayOperations', () => {
     const newArr = ['a', 'c', 'b'];
 
     const operations = generateArrayOperations(oldArr, newArr);
-    const optimized = optimizeArrayOperations(operations);
-    expect(optimized).toContainEqual(expect.objectContaining({ type: 'move' }));
+    const patch = batchArrayOperations(operations);
+    expect(patch[0].op).toBe('move');
   });
 
   test('handles empty arrays', () => {
     expect(generateArrayOperations([], [])).toEqual([]);
-    expect(generateArrayOperations(['a'], [])).toEqual([
-      { type: 'remove' as const, index: 0, value: 'a' },
-    ]);
-    expect(generateArrayOperations([], ['a'])).toEqual([
-      { type: 'add' as const, index: 0, value: 'a' },
-    ]);
+
+    const removeOps = batchArrayOperations(generateArrayOperations(['a'], []));
+    expect(removeOps).toEqual([{ op: 'remove', path: '/0' }]);
+
+    const addOps = batchArrayOperations(generateArrayOperations([], ['a']));
+    expect(addOps).toEqual([{ op: 'add', path: '/0', value: 'a' }]);
+  });
+
+  test('handles complex transformations', () => {
+    const oldArr = [1, 2, 3, 4, 5];
+    const newArr = [5, 4, 6, 7, 1];
+
+    const operations = generateArrayOperations(oldArr, newArr);
+    const patch = batchArrayOperations(operations);
+
+    // Apply the patch to oldArr and verify the result
+    const result = [...oldArr];
+    patch.forEach(op => {
+      let value;
+      switch (op.op) {
+        case 'move':
+          if (!op.from) {
+            throw new Error('Move operation missing from path');
+          }
+          value = result.splice(parseInt(op.from.slice(1)), 1)[0];
+          result.splice(parseInt(op.path.slice(1)), 0, value);
+          break;
+        case 'remove':
+          if ('count' in op) {
+            result.splice(parseInt(op.path.slice(1)), op.count);
+          } else {
+            result.splice(parseInt(op.path.slice(1)), 1);
+          }
+          break;
+        case 'add':
+          if (Array.isArray(op.value)) {
+            result.splice(parseInt(op.path.slice(1)), 0, ...op.value);
+          } else {
+            result.splice(parseInt(op.path.slice(1)), 0, op.value);
+          }
+          break;
+      }
+    });
+
+    expect(result).toEqual(newArr);
   });
 });
