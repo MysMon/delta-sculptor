@@ -1,7 +1,7 @@
 import { PatchError, PatchErrorCode } from './errors';
-import { JsonPatch } from './types';
+import { JsonPatch, BatchRemoveOperation, BatchAddOperation } from './types';
 
-interface ArrayOperation {
+export interface ArrayOperation {
   type: 'add' | 'remove' | 'move';
   index: number;
   fromIndex?: number;
@@ -11,28 +11,224 @@ interface ArrayOperation {
 /**
  * Converts array operations to JSON Patch format
  */
-function toJsonPatch(operations: ArrayOperation[]): JsonPatch {
+interface ToJsonPatchParams {
+  basePath?: string;
+}
+
+export function toJsonPatch(
+  operations: ArrayOperation[],
+  params: ToJsonPatchParams = {}
+): JsonPatch {
+  const { basePath = '' } = params;
   return operations.map(op => {
     switch (op.type) {
       case 'move':
         return {
           op: 'move',
-          path: `/${op.index}`,
-          from: `/${op.fromIndex}`,
+          path: `${basePath}/${op.index}`,
+          from: `${basePath}/${op.fromIndex}`,
         };
       case 'add':
         return {
           op: 'add',
-          path: `/${op.index}`,
+          path: `${basePath}/${op.index}`,
           value: op.value,
         };
       case 'remove':
         return {
           op: 'remove',
-          path: `/${op.index}`,
+          path: `${basePath}/${op.index}`,
         };
     }
   });
+}
+
+/**
+ * Validates array indices in patch operations
+ */
+export function validateArrayIndex(array: any[], path: string): number {
+  const match = /^\/(-|\d+)$/.exec(path);
+  if (!match) {
+    throw new PatchError(
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Invalid array index pointer'
+    );
+  }
+
+  const index = match[1] === '-' ? array.length : parseInt(match[1], 10);
+
+  if (index < 0) {
+    throw new PatchError(
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Array index cannot be negative'
+    );
+  }
+
+  if (match[1] !== '-' && index >= array.length) {
+    throw new PatchError(
+      PatchErrorCode.ARRAY_INDEX_ERROR,
+      'Array index out of bounds'
+    );
+  }
+
+  return index;
+}
+
+/**
+ * Generates array operations that transform source array into target array
+ */
+function handleRemaining(
+  operations: ArrayOperation[],
+  source: any[],
+  target: any[],
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
+  if (targetIndex < target.length) {
+    // Add remaining target elements
+    operations.push({
+      type: 'add',
+      index: targetIndex,
+      value: target[targetIndex],
+    });
+    return { sourceIndex: source.length, targetIndex: targetIndex + 1 };
+  } else {
+    // Remove remaining source elements
+    const lastSourceIndex = source.length - 1;
+    if (lastSourceIndex >= 0) {
+      operations.push({
+        type: 'remove',
+        index: lastSourceIndex,
+        value: source[lastSourceIndex],
+      });
+    }
+    return { sourceIndex: source.length, targetIndex };
+  }
+}
+
+function handleMoveOperation(
+  operations: ArrayOperation[],
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number,
+  targetInSource: number
+): { sourceIndex: number; targetIndex: number } {
+  operations.push({
+    type: 'move',
+    index: targetIndex,
+    fromIndex: targetInSource,
+    value: target[targetIndex],
+  });
+  source.splice(targetInSource, 1);
+  return { sourceIndex: targetInSource, targetIndex: targetIndex + 1 };
+}
+
+function handleSimpleAddRemove(
+  operations: ArrayOperation[],
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
+  operations.push({
+    type: 'remove',
+    index: sourceIndex,
+    value: source[sourceIndex],
+  });
+  operations.push({
+    type: 'add',
+    index: targetIndex,
+    value: target[targetIndex],
+  });
+  return { sourceIndex: sourceIndex + 1, targetIndex: targetIndex + 1 };
+}
+
+function handleMatchedElements(
+  sourceIndex: number,
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
+  return {
+    sourceIndex: sourceIndex + 1,
+    targetIndex: targetIndex + 1,
+  };
+}
+
+function findTargetInSource(
+  source: any[],
+  target: any,
+  startIndex: number
+): number {
+  return source.indexOf(target, startIndex + 1);
+}
+
+function handleElement(
+  operations: ArrayOperation[],
+  source: any[],
+  target: any[],
+  sourceIndex: number,
+  targetIndex: number
+): { sourceIndex: number; targetIndex: number } {
+  const targetInSource = findTargetInSource(
+    source,
+    target[targetIndex],
+    sourceIndex
+  );
+
+  if (targetInSource >= 0) {
+    return handleMoveOperation(
+      operations,
+      source,
+      target,
+      sourceIndex,
+      targetIndex,
+      targetInSource
+    );
+  }
+
+  return handleSimpleAddRemove(
+    operations,
+    source,
+    target,
+    sourceIndex,
+    targetIndex
+  );
+}
+
+export function generateArrayOperations(
+  source: any[],
+  target: any[]
+): ArrayOperation[] {
+  const operations: ArrayOperation[] = [];
+  let sourceIndex = 0;
+  let targetIndex = 0;
+
+  while (sourceIndex < source.length || targetIndex < target.length) {
+    if (sourceIndex >= source.length || targetIndex >= target.length) {
+      const result = handleRemaining(operations, source, target, targetIndex);
+      sourceIndex = result.sourceIndex;
+      targetIndex = result.targetIndex;
+      continue;
+    }
+
+    if (source[sourceIndex] === target[targetIndex]) {
+      const result = handleMatchedElements(sourceIndex, targetIndex);
+      sourceIndex = result.sourceIndex;
+      targetIndex = result.targetIndex;
+      continue;
+    }
+
+    const result = handleElement(
+      operations,
+      source,
+      target,
+      sourceIndex,
+      targetIndex
+    );
+    sourceIndex = result.sourceIndex;
+    targetIndex = result.targetIndex;
+  }
+
+  return operations;
 }
 
 /**
@@ -81,181 +277,27 @@ function fromJsonPatch(patch: JsonPatch): ArrayOperation[] {
 }
 
 /**
- * Validates array indices in patch operations
- */
-export function validateArrayIndex(array: any[], path: string): number {
-  const match = /^\/(-|\d+)$/.exec(path);
-  if (!match) {
-    throw new PatchError(
-      PatchErrorCode.ARRAY_INDEX_ERROR,
-      'Invalid array index pointer'
-    );
-  }
-
-  const index = match[1] === '-' ? array.length : parseInt(match[1], 10);
-
-  if (index < 0) {
-    throw new PatchError(
-      PatchErrorCode.ARRAY_INDEX_ERROR,
-      'Array index cannot be negative'
-    );
-  }
-
-  if (match[1] !== '-' && index >= array.length) {
-    throw new PatchError(
-      PatchErrorCode.ARRAY_INDEX_ERROR,
-      'Array index out of bounds'
-    );
-  }
-
-  return index;
-}
-
-/**
- * Generates array operations that transform source array into target array
- */
-function handleRemaining(
-  operations: ArrayOperation[],
-  source: any[],
-  target: any[],
-  sourceIndex: number,
-  targetIndex: number
-): { sourceIndex: number; targetIndex: number } {
-  if (sourceIndex >= source.length) {
-    // Add remaining target elements
-    operations.push({
-      type: 'add',
-      index: targetIndex,
-      value: target[targetIndex],
-    });
-    return { sourceIndex, targetIndex: targetIndex + 1 };
-  } else {
-    // Remove remaining source elements
-    operations.push({
-      type: 'remove',
-      index: sourceIndex,
-      value: source[sourceIndex],
-    });
-    return { sourceIndex: sourceIndex + 1, targetIndex };
-  }
-}
-
-function handleMoveOperation(
-  operations: ArrayOperation[],
-  source: any[],
-  target: any[],
-  sourceIndex: number,
-  targetIndex: number,
-  targetInSource: number
-): { sourceIndex: number; targetIndex: number } {
-  operations.push({
-    type: 'move',
-    index: targetIndex,
-    fromIndex: targetInSource,
-    value: target[targetIndex],
-  });
-  source.splice(targetInSource, 1);
-  return { sourceIndex: targetInSource, targetIndex: targetIndex + 1 };
-}
-
-function handleSimpleAddRemove(
-  operations: ArrayOperation[],
-  source: any[],
-  target: any[],
-  sourceIndex: number,
-  targetIndex: number
-): { sourceIndex: number; targetIndex: number } {
-  operations.push({
-    type: 'remove',
-    index: sourceIndex,
-    value: source[sourceIndex],
-  });
-  operations.push({
-    type: 'add',
-    index: targetIndex,
-    value: target[targetIndex],
-  });
-  return { sourceIndex: sourceIndex + 1, targetIndex: targetIndex + 1 };
-}
-
-export function generateArrayOperations(
-  source: any[],
-  target: any[]
-): ArrayOperation[] {
-  const operations: ArrayOperation[] = [];
-  let sourceIndex = 0;
-  let targetIndex = 0;
-
-  while (sourceIndex < source.length || targetIndex < target.length) {
-    if (sourceIndex >= source.length || targetIndex >= target.length) {
-      const result = handleRemaining(
-        operations,
-        source,
-        target,
-        sourceIndex,
-        targetIndex
-      );
-      sourceIndex = result.sourceIndex;
-      targetIndex = result.targetIndex;
-    } else if (source[sourceIndex] === target[targetIndex]) {
-      // Elements match, skip
-      sourceIndex++;
-      targetIndex++;
-    } else {
-      // Look for possible moves
-      const targetInSource = source.indexOf(
-        target[targetIndex],
-        sourceIndex + 1
-      );
-      if (targetInSource >= 0) {
-        const result = handleMoveOperation(
-          operations,
-          source,
-          target,
-          sourceIndex,
-          targetIndex,
-          targetInSource
-        );
-        sourceIndex = result.sourceIndex;
-        targetIndex = result.targetIndex;
-      } else {
-        const result = handleSimpleAddRemove(
-          operations,
-          source,
-          target,
-          sourceIndex,
-          targetIndex
-        );
-        sourceIndex = result.sourceIndex;
-        targetIndex = result.targetIndex;
-      }
-    }
-  }
-
-  return operations;
-}
-
-/**
  * Optimizes array operations by detecting moves and combining operations
  */
-export function optimizeArrayOperations(operations: JsonPatch): JsonPatch {
-  const internalOps = fromJsonPatch(operations);
+export function optimizeArrayOperations(
+  operations: ArrayOperation[]
+): ArrayOperation[] {
   const optimized: ArrayOperation[] = [];
   let i = 0;
 
-  while (i < internalOps.length) {
-    const current = internalOps[i];
+  while (i < operations.length) {
+    const current = operations[i];
 
     if (
       current.type === 'remove' &&
-      i + 1 < internalOps.length &&
-      internalOps[i + 1].type === 'add' &&
-      current.value === internalOps[i + 1].value
+      i + 1 < operations.length &&
+      operations[i + 1].type === 'add' &&
+      current.value === operations[i + 1].value
     ) {
       // Convert remove+add into move
       optimized.push({
         type: 'move',
-        index: internalOps[i + 1].index,
+        index: operations[i + 1].index,
         fromIndex: current.index,
         value: current.value,
       });
@@ -266,7 +308,16 @@ export function optimizeArrayOperations(operations: JsonPatch): JsonPatch {
     }
   }
 
-  return toJsonPatch(optimized);
+  return optimized;
+}
+
+/**
+ * Optimizes JSON Patch operations by detecting moves
+ */
+export function optimizeJsonPatch(patch: JsonPatch): JsonPatch {
+  const arrayOps = fromJsonPatch(patch);
+  const optimizedOps = optimizeArrayOperations(arrayOps);
+  return toJsonPatch(optimizedOps, { basePath: '' });
 }
 
 /**
@@ -286,33 +337,23 @@ export function batchArrayOperations(
 
     if (currentBatch.length === 1) {
       const op = currentBatch[0];
-      if (op.type === 'move') {
-        patch.push({
-          op: 'move',
-          path: `/${op.index}`,
-          from: `/${op.fromIndex}`,
-        });
-      } else {
-        patch.push({
-          op: op.type === 'add' ? 'add' : 'remove',
-          path: `/${op.index}`,
-          ...(op.type === 'add' ? { value: op.value } : {}),
-        });
-      }
+      patch.push(...toJsonPatch([op], { basePath: '' }));
     } else if (lastType === 'remove') {
       // Batch sequential removes
+      // For batch removes, create a BatchRemoveOperation
       patch.push({
         op: 'remove',
         path: `/${currentBatch[0].index}`,
         count: currentBatch.length,
-      });
+      } satisfies BatchRemoveOperation);
     } else if (lastType === 'add') {
       // Batch sequential adds
+      // For batch adds, create a BatchAddOperation
       patch.push({
         op: 'add',
         path: `/${currentBatch[0].index}`,
         value: currentBatch.map(op => op.value),
-      });
+      } satisfies BatchAddOperation);
     }
 
     currentBatch = [];
