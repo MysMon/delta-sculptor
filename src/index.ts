@@ -114,7 +114,7 @@ export class DeltaSculptor {
       maxDepth: 50,
     }
   ): JsonPatch {
-    return createPatch(oldObj, newObj, '', options);
+    return createPatch(oldObj, newObj, options);
   }
 
   /**
