@@ -1,11 +1,19 @@
 import {
   generateArrayOperations,
-  optimizeArrayOperations,
   batchArrayOperations,
+  toJsonPatch,
+  optimizeJsonPatch,
 } from './array-utils';
-import { PatchError, PatchErrorCode } from './errors';
-import { JsonPatch } from './types';
+import { PatchError } from './errors';
+import type { JsonPatch } from './types';
 import { detectCircular } from './validate';
+
+interface DiffArrayOptions {
+  checkCircular?: boolean;
+  maxBatchSize?: number;
+  batchArrayOps?: boolean;
+  basePath?: string;
+}
 
 /**
  * Generate a diff for arrays using LCS for optimal move detection
@@ -13,72 +21,37 @@ import { detectCircular } from './validate';
 export function diffArrayWithLCS(
   oldArr: any[],
   newArr: any[],
-  basePath: string,
-  options: {
-    checkCircular?: boolean;
-    maxBatchSize?: number;
-    batchArrayOps?: boolean;
-  } = {}
+  params: DiffArrayOptions = {}
 ): JsonPatch {
   const {
     checkCircular = true,
     maxBatchSize = 100,
     batchArrayOps = false,
-  } = options;
+    basePath = '',
+  } = params;
 
   // Check for circular references in new array
   if (checkCircular && detectCircular(newArr)) {
     throw PatchError.circularReference(basePath);
   }
 
-  // Generate base operations
-  let operations = generateArrayOperations(oldArr, newArr);
+  // Generate base operations and convert to JSON Patch
+  const operations = generateArrayOperations(oldArr, newArr);
 
-  // Optimize by converting appropriate remove+add pairs into moves
-  operations = optimizeArrayOperations(operations);
-
-  // Convert operations to JSON Patch format
+  let patch: JsonPatch;
   if (batchArrayOps) {
-    return batchArrayOperations(operations, maxBatchSize).map(op => ({
-      ...op,
-      path: basePath + op.path,
-      ...(op.from ? { from: basePath + op.from } : {}),
-    }));
+    patch = batchArrayOperations(operations, maxBatchSize);
+  } else {
+    patch = toJsonPatch(operations, { basePath: '' });
+    patch = optimizeJsonPatch(patch);
   }
 
-  // Convert individual operations to JSON Patch format
-  return operations.map(op => {
-    switch (op.type) {
-      case 'add':
-        return {
-          op: 'add',
-          path: `${basePath}/${op.index}`,
-          value: op.value,
-        };
-      case 'remove':
-        return {
-          op: 'remove',
-          path: `${basePath}/${op.index}`,
-        };
-      case 'move':
-        if (typeof op.fromIndex !== 'number') {
-          throw new PatchError(
-            PatchErrorCode.INTERNAL_ERROR,
-            'Move operation missing fromIndex'
-          );
-        }
-        return {
-          op: 'move',
-          path: `${basePath}/${op.index}`,
-          from: `${basePath}/${op.fromIndex}`,
-        };
-      default:
-        throw new PatchError(
-          PatchErrorCode.INVALID_OPERATION,
-          `Invalid array operation type: ${(op as any).type}`
-        );
-    }
-  });
+  // Add base path to all operations
+  return patch.map(op => ({
+    ...op,
+    path: basePath + op.path,
+    ...(op.from ? { from: basePath + op.from } : {}),
+  }));
 }
 
 /**
@@ -88,8 +61,9 @@ export function diffArrayWithLCS(
 export function diffArraySimple(
   oldArr: any[],
   newArr: any[],
-  basePath: string
+  params: { basePath?: string } = {}
 ): JsonPatch {
+  const { basePath = '' } = params;
   const patch: JsonPatch = [];
   const minLen = Math.min(oldArr.length, newArr.length);
 
