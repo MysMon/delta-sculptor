@@ -1,10 +1,6 @@
 import { PatchError, PatchErrorCode } from './errors';
 import { JsonPatch, JsonPatchOperation } from './types';
-import {
-  getValueByPointer,
-  setValueByPointer,
-  removeValueByPointer,
-} from './utils';
+import { getValueByPointer, setValueByPointer, removeByPointer } from './utils';
 import {
   validatePatch,
   validateJsonPointer,
@@ -44,18 +40,18 @@ function handleAddOperation(target: any, path: string, value: any): void {
 }
 
 function handleRemoveOperation(target: any, path: string): void {
-  removeValueByPointer(target, path);
+  removeByPointer(target, path);
 }
 
 function handleReplaceOperation(target: any, path: string, value: any): void {
-  const oldValue = removeValueByPointer(target, path);
+  const oldValue = removeByPointer(target, path);
   if (oldValue === undefined) {
     throw PatchError.invalidPointer(path);
   }
   setValueByPointer(target, path, value);
 }
 
-function handleMoveOperation(target: any, path: string, from: string): void {
+function handleMoveOperation(target: any, path: string, from?: string): void {
   if (!from) {
     throw PatchError.missingField('move', 'from');
   }
@@ -73,11 +69,11 @@ function handleMoveOperation(target: any, path: string, from: string): void {
   if (valueToMove === undefined) {
     throw PatchError.invalidPointer(from);
   }
-  removeValueByPointer(target, from);
+  removeByPointer(target, from);
   setValueByPointer(target, path, valueToMove);
 }
 
-function handleCopyOperation(target: any, path: string, from: string): void {
+function handleCopyOperation(target: any, path: string, from?: string): void {
   if (!from) {
     throw PatchError.missingField('copy', 'from');
   }
@@ -94,7 +90,7 @@ function handleTestOperation(target: any, path: string, value: any): void {
   if (currentVal === undefined) {
     throw PatchError.invalidPointer(path);
   }
-  if (!deepEqual(currentVal, value, new WeakMap())) {
+  if (!deepEqual(currentVal, value)) {
     throw PatchError.testFailed(path, value, currentVal);
   }
 }
@@ -107,14 +103,14 @@ export function applyOperation(
   op: JsonPatchOperation,
   options: PatchOptions = {}
 ): void {
-  const opts = { ...defaultOptions, ...options };
+  const { checkCircular = true } = { ...defaultOptions, ...options };
   const { op: operation, path, from, value } = op;
 
   // Validate path
   validateJsonPointer(path);
 
   // Check for circular references
-  if (opts.checkCircular && value !== undefined && detectCircular(value)) {
+  if (checkCircular && value !== undefined && detectCircular(value)) {
     throw PatchError.circularReference(path);
   }
 
