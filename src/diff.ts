@@ -36,17 +36,32 @@ export interface CreateDiffOptions {
   maxBatchSize?: number;
 }
 
+interface CreatePatchParams extends CreateDiffOptions {
+  basePath?: string;
+  currentDepth?: number;
+}
+
+interface HandleArrayParams extends CreateDiffOptions {
+  basePath: string;
+  currentDepth: number;
+}
+
+interface CreatePatchArgs {
+  oldObj: any;
+  newObj: any;
+  params?: CreatePatchParams;
+}
+
 /**
  * Creates a JSON Patch that transforms oldObj into newObj
  */
-export function createPatch(
-  oldObj: any,
-  newObj: any,
-  basePath: string = '',
-  options: CreateDiffOptions = {},
-  currentDepth: number = 0
-): JsonPatch {
-  // Handle max depth
+export function createPatch({
+  oldObj,
+  newObj,
+  params = {},
+}: CreatePatchArgs): JsonPatch {
+  const { basePath = '', currentDepth = 0, ...options } = params;
+
   // Handle primitive values and null first
   if (
     !isObject(oldObj) ||
@@ -54,7 +69,7 @@ export function createPatch(
     oldObj === null ||
     newObj === null
   ) {
-    return handlePrimitiveValues(oldObj, newObj, basePath);
+    return handlePrimitiveValues({ oldObj, newObj, basePath });
   }
 
   // Validate depth and check for circular references
@@ -73,55 +88,95 @@ export function createPatch(
 
     // Handle nested arrays and special values
     if (oldArray.some(isNestedStructure) || newArray.some(isNestedStructure)) {
-      return handleNestedArrays(
-        oldArray,
-        newArray,
+      const nestedOptions = {
         basePath,
-        options,
-        currentDepth
-      );
+        currentDepth,
+        maxDepth: options.maxDepth,
+        checkCircular: options.checkCircular,
+        detectMove: options.detectMove,
+        batchArrayOps: options.batchArrayOps,
+        maxBatchSize: options.maxBatchSize,
+      };
+      return handleNestedArrays({ oldArray, newArray, params: nestedOptions });
     }
 
-    return handleArrays(oldArray, newArray, basePath, options);
+    return handleArrays({
+      oldArray,
+      newArray,
+      params: {
+        basePath,
+        detectMove: options.detectMove,
+        batchArrayOps: options.batchArrayOps,
+        maxBatchSize: options.maxBatchSize,
+        checkCircular: options.checkCircular,
+      },
+    });
   }
 
   // Handle objects
-  return handleObjects(oldObj, newObj, basePath, options, currentDepth);
+  const objectOptions = {
+    basePath,
+    currentDepth,
+    maxDepth: options.maxDepth,
+    checkCircular: options.checkCircular,
+    detectMove: options.detectMove,
+    batchArrayOps: options.batchArrayOps,
+    maxBatchSize: options.maxBatchSize,
+  };
+  return handleObjects({ oldObj, newObj, params: objectOptions });
 }
 
-function handlePrimitiveValues(
-  oldObj: any,
-  newObj: any,
-  basePath: string
-): JsonPatch {
-  if (deepEqual(oldObj, newObj, new WeakMap())) {
+interface HandlePrimitivesArgs {
+  oldObj: any;
+  newObj: any;
+  basePath: string;
+}
+
+function handlePrimitiveValues({
+  oldObj,
+  newObj,
+  basePath,
+}: HandlePrimitivesArgs): JsonPatch {
+  const path = basePath || '/';
+
+  if (deepEqual(oldObj, newObj)) {
     return [];
   }
 
   if (typeof oldObj === 'undefined') {
-    return [{ op: 'add', path: basePath || '/', value: newObj }];
+    return [{ op: 'add', path, value: newObj }];
   }
 
   if (typeof newObj === 'undefined') {
-    return [{ op: 'remove', path: basePath || '/' }];
+    return [{ op: 'remove', path }];
   }
 
-  return [{ op: 'replace', path: basePath || '/', value: newObj }];
+  return [{ op: 'replace', path, value: newObj }];
 }
 
-function handleArrays(
-  oldArr: any[],
-  newArr: any[],
-  basePath: string,
-  options: CreateDiffOptions
-): JsonPatch {
-  return options.detectMove
-    ? diffArrayWithLCS(oldArr, newArr, basePath, {
-        checkCircular: options.checkCircular,
-        batchArrayOps: options.batchArrayOps,
-        maxBatchSize: options.maxBatchSize,
-      })
-    : diffArraySimple(oldArr, newArr, basePath);
+interface HandleArraysArgs {
+  oldArray: any[];
+  newArray: any[];
+  params: CreateDiffOptions & { basePath: string };
+}
+
+function handleArrays({
+  oldArray,
+  newArray,
+  params,
+}: HandleArraysArgs): JsonPatch {
+  const { basePath, detectMove, batchArrayOps, maxBatchSize, checkCircular } =
+    params;
+
+  if (detectMove) {
+    return diffArrayWithLCS(oldArray, newArray, {
+      basePath,
+      checkCircular,
+      batchArrayOps,
+      maxBatchSize,
+    });
+  }
+  return diffArraySimple(oldArray, newArray, { basePath });
 }
 
 function isObject(obj: any): boolean {
@@ -136,60 +191,92 @@ function isEmptyObject(obj: any): boolean {
   return Object.keys(obj).length === 0;
 }
 
-function handleNestedArrays(
-  oldArr: any[],
-  newArr: any[],
-  basePath: string,
-  options: CreateDiffOptions,
-  currentDepth: number
-): JsonPatch {
+interface HandleNestedArraysArgs {
+  oldArray: any[];
+  newArray: any[];
+  params: HandleArrayParams;
+}
+
+function handleNestedArrays({
+  oldArray,
+  newArray,
+  params,
+}: HandleNestedArraysArgs): JsonPatch {
+  const {
+    basePath,
+    currentDepth,
+    maxDepth,
+    checkCircular,
+    detectMove,
+    batchArrayOps,
+    maxBatchSize,
+  } = params;
   const patch: JsonPatch = [];
-  const minLen = Math.min(oldArr.length, newArr.length);
+  const minLen = Math.min(oldArray.length, newArray.length);
 
   // Handle common length elements recursively
   for (let i = 0; i < minLen; i++) {
-    const oldVal = oldArr[i];
-    const newVal = newArr[i];
-    if (!deepEqual(oldVal, newVal, new WeakMap())) {
+    const oldVal = oldArray[i];
+    const newVal = newArray[i];
+    if (!deepEqual(oldVal, newVal)) {
       patch.push(
-        ...createPatch(
-          oldVal,
-          newVal,
-          `${basePath}/${i}`,
-          options,
-          currentDepth + 1
-        )
+        ...createPatch({
+          oldObj: oldVal,
+          newObj: newVal,
+          params: {
+            basePath: `${basePath}/${i}`,
+            currentDepth: currentDepth + 1,
+            maxDepth,
+            checkCircular,
+            detectMove,
+            batchArrayOps,
+            maxBatchSize,
+          },
+        })
       );
     }
   }
 
   // Handle added elements
-  for (let i = minLen; i < newArr.length; i++) {
+  for (let i = minLen; i < newArray.length; i++) {
     patch.push({
       op: 'add',
       path: `${basePath}/${i}`,
-      value: newArr[i],
+      value: newArray[i],
     });
   }
 
   // Handle removed elements
-  for (let i = newArr.length; i < oldArr.length; i++) {
+  for (let i = newArray.length; i < oldArray.length; i++) {
     patch.push({
       op: 'remove',
-      path: `${basePath}/${oldArr.length - 1 - (i - newArr.length)}`,
+      path: `${basePath}/${oldArray.length - 1 - (i - newArray.length)}`,
     });
   }
 
   return patch;
 }
 
-function handleObjects(
-  oldObj: Record<string, any>,
-  newObj: Record<string, any>,
-  basePath: string,
-  options: CreateDiffOptions,
-  currentDepth: number
-): JsonPatch {
+interface HandleObjectsArgs {
+  oldObj: Record<string, any>;
+  newObj: Record<string, any>;
+  params: HandleArrayParams;
+}
+
+function handleObjects({
+  oldObj,
+  newObj,
+  params,
+}: HandleObjectsArgs): JsonPatch {
+  const {
+    basePath,
+    currentDepth,
+    maxDepth,
+    checkCircular,
+    detectMove,
+    batchArrayOps,
+    maxBatchSize,
+  } = params;
   const patch: JsonPatch = [];
   const oldKeys = Object.keys(oldObj);
   const newKeys = Object.keys(newObj);
@@ -214,15 +301,21 @@ function handleObjects(
         path: newPath,
         value: newObj[key],
       });
-    } else if (!deepEqual(oldObj[key], newObj[key], new WeakMap())) {
+    } else if (!deepEqual(oldObj[key], newObj[key])) {
       patch.push(
-        ...createPatch(
-          oldObj[key],
-          newObj[key],
-          newPath,
-          options,
-          currentDepth + 1
-        )
+        ...createPatch({
+          oldObj: oldObj[key],
+          newObj: newObj[key],
+          params: {
+            basePath: newPath,
+            currentDepth: currentDepth + 1,
+            maxDepth,
+            checkCircular,
+            detectMove,
+            batchArrayOps,
+            maxBatchSize,
+          },
+        })
       );
     }
   }
