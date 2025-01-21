@@ -1,4 +1,4 @@
-import { optimizeArrayOperations } from './array-utils';
+import { optimizeJsonPatch } from './array-utils';
 import { PatchError, PatchErrorCode } from './errors';
 import { applyOperation, PatchOptions } from './patch';
 import { JsonPatch, JsonPatchOperation, Patchable } from './types';
@@ -109,16 +109,16 @@ export function createInversePatch<T extends Patchable>(
     }
   }
 
-  // Optimize the inverse patch if needed
+  // Optimize and validate the inverse patch
   if (opts.batchArrayOps) {
-    inversePatch = optimizeArrayOperations(inversePatch);
+    inversePatch = optimizeJsonPatch(inversePatch);
   }
 
   if (opts.validateInverse) {
     validatePatch(inversePatch);
   }
 
-  return inversePatch;
+  return inversePatch.filter(op => op !== undefined) as JsonPatch;
 }
 
 /**
