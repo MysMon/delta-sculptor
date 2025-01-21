@@ -2,6 +2,10 @@
 
 A robust TypeScript implementation of JSON Patch ([RFC 6902](https://tools.ietf.org/html/rfc6902)) with additional features for efficient diffing, patching, and patch inversion.
 
+## Warning
+
+This repository is an alpha release. It is not yet ready for production use. Please use at your own risk.
+
 ## Features
 
 - 🔄 Full JSON Patch (RFC 6902) compliance
