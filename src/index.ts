@@ -75,7 +75,7 @@ export class DeltaSculptor {
     options?: PatchOptions
   ): PatchResult<T> {
     try {
-      const result = this.applyPatchImmutable(target, patch, options);
+      const result = applyPatchImmutable(target, patch, options);
       return {
         result,
         success: true,
@@ -114,7 +114,11 @@ export class DeltaSculptor {
       maxDepth: 50,
     }
   ): JsonPatch {
-    return createPatch(oldObj, newObj, options);
+    return createPatch({
+      oldObj,
+      newObj,
+      params: options,
+    });
   }
 
   /**
@@ -161,7 +165,7 @@ export class DeltaSculptor {
     patch: JsonPatch,
     options?: InversePatchOptions
   ): JsonPatch {
-    return applyPatchWithInverse(target, patch, options);
+    return applyPatchWithInverse(target, patch, options || {});
   }
 
   /**
@@ -176,7 +180,7 @@ export class DeltaSculptor {
     inversePatch: JsonPatch,
     options?: PatchOptions
   ): void {
-    this.applyPatch(target, inversePatch, options);
+    applyPatch(target, inversePatch, options);
   }
 
   /**
