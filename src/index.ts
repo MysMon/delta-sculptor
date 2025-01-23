@@ -108,16 +108,17 @@ export class DeltaSculptor {
   static createPatch<T extends Patchable>(
     oldObj: T,
     newObj: T,
-    options: CreateDiffOptions = {
+    options: CreateDiffOptions = {}
+  ): JsonPatch {
+    const defaultOptions = {
       detectMove: false,
       batchArrayOps: true,
       maxDepth: 50,
-    }
-  ): JsonPatch {
+    };
     return createPatch({
       oldObj,
       newObj,
-      params: options,
+      params: { ...defaultOptions, ...options },
     });
   }
 
