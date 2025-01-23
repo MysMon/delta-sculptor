@@ -71,6 +71,38 @@ describe('LCS (Longest Common Subsequence)', () => {
 
     expect(result1).toEqual(result2);
   });
+
+  test('handles mixed type arrays', () => {
+    const arr1 = [1, 'two', true, null, undefined, { id: 3 }];
+    const arr2 = [1, 'two', false, null, undefined, { id: 3 }];
+
+    const indices = findLCS(arr1, arr2);
+    expect(indices.length).toBe(5); // All except boolean should match
+    expect(indices.map(i => arr1[i])).toEqual([
+      1,
+      'two',
+      null,
+      undefined,
+      { id: 3 },
+    ]);
+  });
+
+  test('manages cache size', () => {
+    // Generate many different arrays to test cache management
+    const arrays = Array.from({ length: 2000 }, (_, i) =>
+      Array.from({ length: 3 }, (_, j) => i + j)
+    );
+
+    // Perform many LCS operations
+    for (let i = 0; i < arrays.length - 1; i++) {
+      findLCS(arrays[i], arrays[i + 1]);
+    }
+
+    // Cache should have automatically cleaned up old entries
+    const result1 = findLCS([1, 2, 3], [1, 2, 3]);
+    const result2 = findLCS([1, 2, 3], [1, 2, 3]);
+    expect(result1).toEqual(result2); // Cache still works
+  });
 });
 
 describe('getArraySimilarity', () => {
@@ -104,6 +136,26 @@ describe('getArraySimilarity', () => {
 
     expect(score1).toBe(score2);
     expect(score1).toBe(3 / 5);
+  });
+
+  test('handles arrays with diverse types', () => {
+    const arr1 = [
+      null,
+      undefined,
+      true,
+      false,
+      42,
+      'string',
+      { id: 1 },
+      { key: 'value' },
+      [1, 2],
+      new Date(),
+    ];
+    const arr2 = [...arr1]; // Copy array
+    arr2[5] = 'different'; // Change one value
+
+    const similarity = getArraySimilarity(arr1, arr2);
+    expect(similarity).toBe(9 / 10); // 9 matching elements out of 10
   });
 
   test('handles large arrays efficiently', () => {

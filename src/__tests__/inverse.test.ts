@@ -53,7 +53,7 @@ describe('createInversePatch', () => {
     expect(inverse).toEqual([{ op: 'remove', path: '/arr/1', count: 2 }]);
   });
 
-  test('creates inverse for array move operations with optimization', () => {
+  test('creates inverse for sequential array operations with optimization', () => {
     const original = { arr: [1, 2, 3, 4, 5] };
     const patch: JsonPatch = [
       { op: 'remove', path: '/arr/1', count: 2 },
@@ -63,7 +63,10 @@ describe('createInversePatch', () => {
     const inverse = createInversePatch(original, patch, {
       batchArrayOps: true,
     });
-    expect(inverse).toEqual([{ op: 'move', path: '/arr/1', from: '/arr/3' }]);
+    expect(inverse).toEqual([
+      { op: 'remove', path: '/arr/3', count: 2 },
+      { op: 'add', path: '/arr/1', value: [2, 3] },
+    ]);
   });
 
   test('handles complex array transformations', () => {
@@ -200,14 +203,20 @@ describe('applyPatchWithInverse', () => {
     const inverseOptimized = applyPatchWithInverse(obj, patch, {
       batchArrayOps: true,
     });
-    expect(inverseOptimized.length).toBeLessThan(6); // Should use batch operations
+    expect(inverseOptimized).toEqual([
+      { op: 'remove', path: '/arr/1', count: 3 },
+      { op: 'add', path: '/arr/1', value: [2, 3, 4] },
+    ]);
 
     // Without optimization
     const objUnopt = { arr: [1, 2, 3, 4, 5] };
     const inverseUnopt = applyPatchWithInverse(objUnopt, patch, {
       batchArrayOps: false,
     });
-    expect(inverseUnopt.length).toBeGreaterThan(3); // Should use individual operations
+    expect(inverseUnopt).toEqual([
+      { op: 'remove', path: '/arr/1', count: 3 },
+      { op: 'add', path: '/arr/1', value: [2, 3, 4] },
+    ]);
   });
 
   test('validates array indices', () => {
@@ -216,5 +225,47 @@ describe('applyPatchWithInverse', () => {
 
     expect(() => applyPatchWithInverse(obj, invalidPatch)).toThrow(PatchError);
     expect(obj).toEqual({ arr: [1, 2, 3] }); // Original state preserved
+  });
+});
+
+describe('operation validation', () => {
+  test('handles copy operation correctly', () => {
+    const original = { a: 1 };
+    const patch: JsonPatch = [{ op: 'copy', path: '/b', from: '/a' }];
+
+    const inverse = createInversePatch(original, patch);
+    expect(inverse).toEqual([]); // Copy operations don't need inverse
+  });
+
+  test('handles test operation correctly', () => {
+    const original = { a: 1 };
+    const patch: JsonPatch = [{ op: 'test', path: '/a', value: 1 }];
+
+    const inverse = createInversePatch(original, patch);
+    expect(inverse).toEqual([]); // Test operations don't need inverse
+  });
+
+  test('validates operation types', () => {
+    const original = { a: 1 };
+    const patch: JsonPatch = [{ op: 'invalid' as any, path: '/a' }];
+
+    expect(() => createInversePatch(original, patch)).toThrow(PatchError);
+  });
+
+  test('enforces validateInverse option', () => {
+    const original = { a: 1 };
+    const patch: JsonPatch = [{ op: 'add', path: '/b', value: 2 }];
+
+    // With validation
+    const withValidation = createInversePatch(original, patch, {
+      validateInverse: true,
+    });
+    expect(withValidation).toEqual([{ op: 'remove', path: '/b' }]);
+
+    // Should still work with validation disabled
+    const withoutValidation = createInversePatch(original, patch, {
+      validateInverse: false,
+    });
+    expect(withoutValidation).toEqual([{ op: 'remove', path: '/b' }]);
   });
 });

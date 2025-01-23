@@ -69,7 +69,7 @@ describe('DeltaSculptor', () => {
       const oldObj = { name: 'John', age: 30 };
       const newObj = { name: 'John', age: 31 };
 
-      const patch = DeltaSculptor.createPatch(oldObj, newObj);
+      const patch = DeltaSculptor.createPatch(oldObj, newObj, {});
       expect(patch).toEqual([{ op: 'replace', path: '/age', value: 31 }]);
     });
 
@@ -110,7 +110,7 @@ describe('DeltaSculptor', () => {
       oldObj.self = oldObj;
 
       const newObj = { a: 2 };
-      expect(() => DeltaSculptor.createPatch(oldObj, newObj)).toThrow();
+      expect(() => DeltaSculptor.createPatch(oldObj, newObj, {})).toThrow();
     });
 
     it('should optimize sequential operations', () => {

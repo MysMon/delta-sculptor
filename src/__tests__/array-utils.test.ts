@@ -5,9 +5,13 @@ import {
   optimizeArrayOperations,
   batchArrayOperations,
   generateArrayOperations,
+  ArrayOperation,
+  toJsonPatch,
+  isArrayPath,
+  getArrayBasePath,
+  expandArrayOperations,
 } from '../array-utils';
 import { PatchError } from '../errors';
-import { JsonPatch } from '../types';
 
 describe('validateArrayIndex', () => {
   test('validates valid indices', () => {
@@ -26,32 +30,104 @@ describe('validateArrayIndex', () => {
   });
 });
 
-describe('optimizeArrayOperations', () => {
-  test('converts remove+add into move operations', () => {
-    const patch: JsonPatch = [
-      { op: 'remove', path: '/1' },
-      { op: 'add', path: '/2', value: 'b' },
+describe('toJsonPatch', () => {
+  test('converts array operations to JSON Patch format', () => {
+    const operations: ArrayOperation[] = [
+      { type: 'add', index: 0, value: 'a' },
+      { type: 'remove', index: 1 },
+      { type: 'move', index: 2, fromIndex: 0, value: 'b' },
     ];
 
-    const optimized = optimizeArrayOperations(patch);
-    expect(optimized).toEqual([{ op: 'move', path: '/2', from: '/1' }]);
+    const patch = toJsonPatch(operations);
+    expect(patch).toEqual([
+      { op: 'add', path: '/0', value: 'a' },
+      { op: 'remove', path: '/1' },
+      { op: 'move', path: '/2', from: '/0' },
+    ]);
+  });
+
+  test('handles custom base path', () => {
+    const operations: ArrayOperation[] = [
+      { type: 'add', index: 0, value: 'x' },
+    ];
+
+    const patch = toJsonPatch(operations, { basePath: '/arr' });
+    expect(patch).toEqual([{ op: 'add', path: '/arr/0', value: 'x' }]);
+  });
+});
+
+describe('array path utilities', () => {
+  test('isArrayPath identifies array paths', () => {
+    expect(isArrayPath('/arr/0')).toBe(true);
+    expect(isArrayPath('/arr/-')).toBe(true);
+    expect(isArrayPath('/arr/prop')).toBe(false);
+    expect(isArrayPath('/arr/')).toBe(false);
+  });
+
+  test('getArrayBasePath extracts base path', () => {
+    expect(getArrayBasePath('/arr/0')).toBe('/arr');
+    expect(getArrayBasePath('0')).toBe('');
+    expect(getArrayBasePath('/deep/path/arr/0')).toBe('/deep/path/arr');
+  });
+});
+
+describe('expandArrayOperations', () => {
+  test('expands batch remove operations', () => {
+    const patch = [{ op: 'remove' as const, path: '/0', count: 2 }];
+
+    const expanded = expandArrayOperations(patch);
+    expect(expanded).toEqual([
+      { op: 'remove', path: '/0' },
+      { op: 'remove', path: '/0' },
+    ]);
+  });
+
+  test('expands batch add operations', () => {
+    const patch = [{ op: 'add' as const, path: '/0', value: ['a', 'b'] }];
+
+    const expanded = expandArrayOperations(patch);
+    expect(expanded).toEqual([
+      { op: 'add', path: '/0', value: 'a' },
+      { op: 'add', path: '/1', value: 'b' },
+    ]);
+  });
+
+  test('preserves non-batch operations', () => {
+    const patch = [{ op: 'move' as const, path: '/1', from: '/0' }];
+
+    const expanded = expandArrayOperations(patch);
+    expect(expanded).toEqual(patch);
+  });
+});
+
+describe('optimizeArrayOperations', () => {
+  test('converts remove+add into move operations', () => {
+    const operations: ArrayOperation[] = [
+      { type: 'remove', index: 1, value: 'b' },
+      { type: 'add', index: 2, value: 'b' },
+    ];
+
+    const optimized = optimizeArrayOperations(operations);
+    expect(optimized).toEqual([
+      { type: 'move', index: 2, fromIndex: 1, value: 'b' },
+    ]);
   });
 
   test('preserves non-optimizable operations', () => {
-    const patch: JsonPatch = [
-      { op: 'add', path: '/0', value: 'a' },
-      { op: 'remove', path: '/2' },
+    const operations: ArrayOperation[] = [
+      { type: 'add', index: 0, value: 'a' },
+      { type: 'remove', index: 2 },
     ];
 
-    const optimized = optimizeArrayOperations(patch);
-    expect(optimized).toEqual(patch);
+    const optimized = optimizeArrayOperations(operations);
+    expect(optimized).toEqual(operations);
   });
 });
 
 describe('batchArrayOperations', () => {
   test('batches sequential add operations', () => {
     const operations = batchArrayOperations(
-      generateArrayOperations(['a', 'b', 'c'], [])
+      generateArrayOperations([], ['a', 'b', 'c'])
     );
     expect(operations).toEqual([
       { op: 'add', path: '/0', value: ['a', 'b', 'c'] },
