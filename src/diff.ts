@@ -2,7 +2,7 @@ import { diffArrayWithLCS, diffArraySimple } from './diff-utils';
 import { PatchError } from './errors';
 import { JsonPatch } from './types';
 import { escapePointerSegment } from './utils';
-import { deepEqual, validateMaxDepth, detectCircular } from './validate';
+import { deepEqual, detectCircular } from './validate';
 
 export interface CreateDiffOptions {
   /**
@@ -34,6 +34,16 @@ export interface CreateDiffOptions {
    * @default 100
    */
   maxBatchSize?: number;
+
+  /**
+   * Base path for the current operation
+   */
+  basePath?: string;
+
+  /**
+   * Current depth in the recursion
+   */
+  currentDepth?: number;
 }
 
 interface CreatePatchParams extends CreateDiffOptions {
@@ -60,70 +70,64 @@ export function createPatch({
   newObj,
   params = {},
 }: CreatePatchArgs): JsonPatch {
-  const { basePath = '', currentDepth = 0, ...options } = params;
+  const {
+    detectMove = true,
+    batchArrayOps = true,
+    maxDepth = 100,
+    checkCircular = true,
+    maxBatchSize = 100,
+    basePath = '',
+    currentDepth = 0,
+  } = params;
 
-  // Handle primitive values and null first
-  if (
-    !isObject(oldObj) ||
-    !isObject(newObj) ||
-    oldObj === null ||
-    newObj === null
-  ) {
+  // 深さの検証
+  if (currentDepth > maxDepth) {
+    throw PatchError.maxDepthExceeded(basePath, maxDepth);
+  }
+
+  // 循環参照のチェック
+  if (checkCircular) {
+    if (detectCircular(oldObj) || detectCircular(newObj)) {
+      throw PatchError.circularReference(basePath);
+    }
+  }
+
+  // プリミティブ値の処理
+  if (!isObject(oldObj) || !isObject(newObj)) {
     return handlePrimitiveValues({ oldObj, newObj, basePath });
   }
 
-  // Validate depth and check for circular references
-  if (options.maxDepth !== undefined) {
-    validateMaxDepth(newObj, options.maxDepth, currentDepth);
-  }
-  if (options.checkCircular !== false && detectCircular(newObj)) {
-    throw PatchError.circularReference(basePath);
-  }
-
-  // Handle arrays - including undefined/null elements
-  if (Array.isArray(oldObj) || Array.isArray(newObj)) {
-    // Convert non-arrays to empty arrays for consistent handling
-    const oldArray = Array.isArray(oldObj) ? oldObj : [];
-    const newArray = Array.isArray(newObj) ? newObj : [];
-
-    // Handle nested arrays and special values
-    if (oldArray.some(isNestedStructure) || newArray.some(isNestedStructure)) {
-      const nestedOptions = {
-        basePath,
-        currentDepth,
-        maxDepth: options.maxDepth,
-        checkCircular: options.checkCircular,
-        detectMove: options.detectMove,
-        batchArrayOps: options.batchArrayOps,
-        maxBatchSize: options.maxBatchSize,
-      };
-      return handleNestedArrays({ oldArray, newArray, params: nestedOptions });
-    }
-
+  // 配列の処理
+  if (Array.isArray(oldObj) && Array.isArray(newObj)) {
     return handleArrays({
-      oldArray,
-      newArray,
+      oldArray: oldObj,
+      newArray: newObj,
       params: {
+        detectMove,
+        batchArrayOps,
+        maxDepth,
+        checkCircular,
+        maxBatchSize,
         basePath,
-        detectMove: options.detectMove,
-        batchArrayOps: options.batchArrayOps,
-        maxBatchSize: options.maxBatchSize,
-        checkCircular: options.checkCircular,
+        currentDepth: currentDepth + 1,
       },
     });
   }
 
-  // Handle objects
-  const objectOptions = {
-    basePath,
-    currentDepth,
-    maxDepth: options.maxDepth,
-    checkCircular: options.checkCircular,
-    detectMove: options.detectMove,
-    batchArrayOps: options.batchArrayOps,
-    maxBatchSize: options.maxBatchSize,
-  };
-  return handleObjects({ oldObj, newObj, params: objectOptions });
+  // オブジェクトの処理
+  return handleObjects({
+    oldObj,
+    newObj,
+    params: {
+      detectMove,
+      batchArrayOps,
+      maxDepth,
+      checkCircular,
+      maxBatchSize,
+      basePath,
+      currentDepth: currentDepth + 1,
+    },
+  });
 }
 
 interface HandlePrimitivesArgs {
@@ -165,96 +169,135 @@ function handleArrays({
   newArray,
   params,
 }: HandleArraysArgs): JsonPatch {
-  const { basePath, detectMove, batchArrayOps, maxBatchSize, checkCircular } =
-    params;
+  const { detectMove, batchArrayOps, maxBatchSize = 100 } = params;
 
-  if (detectMove) {
-    return diffArrayWithLCS(oldArray, newArray, {
-      basePath,
-      checkCircular,
-      batchArrayOps,
-      maxBatchSize,
-    });
+  // 配列の差分を計算
+  const operations = detectMove
+    ? diffArrayWithLCS(oldArray, newArray, params)
+    : diffArraySimple(oldArray, newArray, params);
+
+  // 配列操作の最適化を無効にする場合は、そのまま返す
+  if (!batchArrayOps) {
+    return operations.reduce((acc: JsonPatch, op) => {
+      if (op.op === 'add' && Array.isArray(op.value)) {
+        // 配列の追加を個別の操作に分解
+        const basePath = op.path.slice(0, op.path.lastIndexOf('/'));
+        const index = Number(op.path.slice(op.path.lastIndexOf('/') + 1));
+        op.value.forEach((value, i) => {
+          acc.push({
+            op: 'add',
+            path: `${basePath}/${index + i}`,
+            value,
+          });
+        });
+      } else if (op.op === 'remove' && op.count && op.count > 1) {
+        // 複数要素の削除を個別の操作に分解
+        const basePath = op.path.slice(0, op.path.lastIndexOf('/'));
+        const index = Number(op.path.slice(op.path.lastIndexOf('/') + 1));
+        for (let i = 0; i < op.count; i++) {
+          acc.push({
+            op: 'remove',
+            path: `${basePath}/${index}`,
+          });
+        }
+      } else {
+        acc.push(op);
+      }
+      return acc;
+    }, []);
   }
-  return diffArraySimple(oldArray, newArray, { basePath });
+
+  // 配列操作の最適化
+  if (operations.length > 1) {
+    const optimizedOps: JsonPatch = [];
+    let currentBatch: any[] = [];
+    let currentOp = operations[0];
+    const pathParts = currentOp.path.split('/');
+    let batchStartIndex = Number(pathParts[pathParts.length - 1] || '0');
+
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      const pathParts = op.path.split('/');
+      const index = Number(pathParts[pathParts.length - 1] || '0');
+      const isSameBasePath =
+        op.path.slice(0, op.path.lastIndexOf('/')) ===
+        currentOp.path.slice(0, currentOp.path.lastIndexOf('/'));
+
+      if (
+        op.op === currentOp.op &&
+        isSameBasePath &&
+        index === batchStartIndex + currentBatch.length &&
+        currentBatch.length < maxBatchSize &&
+        (op.op === 'add' || op.op === 'replace' || op.op === 'remove')
+      ) {
+        if (op.op === 'add' || op.op === 'replace') {
+          currentBatch.push(op.value);
+        } else if (op.op === 'remove') {
+          currentBatch.push(null);
+        }
+      } else {
+        // 現在のバッチを処理
+        if (currentBatch.length > 0) {
+          if (currentOp.op === 'remove') {
+            optimizedOps.push({
+              op: 'remove',
+              path: currentOp.path,
+              count: currentBatch.length,
+            });
+          } else {
+            optimizedOps.push({
+              op: currentOp.op,
+              path: currentOp.path,
+              value:
+                currentBatch.length === 1 ? currentBatch[0] : [...currentBatch],
+            });
+          }
+        }
+
+        // 新しいバッチを開始
+        currentBatch = [];
+        if (op.op === 'add' || op.op === 'replace') {
+          currentBatch.push(op.value);
+        } else if (op.op === 'remove') {
+          currentBatch.push(null);
+        } else {
+          optimizedOps.push(op);
+        }
+        currentOp = op;
+        batchStartIndex = index;
+      }
+    }
+
+    // 最後のバッチを処理
+    if (currentBatch.length > 0) {
+      if (currentOp.op === 'remove') {
+        optimizedOps.push({
+          op: 'remove',
+          path: currentOp.path,
+          count: currentBatch.length,
+        });
+      } else {
+        optimizedOps.push({
+          op: currentOp.op,
+          path: currentOp.path,
+          value:
+            currentBatch.length === 1 ? currentBatch[0] : [...currentBatch],
+        });
+      }
+    }
+
+    return optimizedOps;
+  }
+
+  return operations;
 }
 
 function isObject(obj: any): boolean {
   return obj !== null && typeof obj === 'object';
 }
 
-function isNestedStructure(value: any): boolean {
-  return Array.isArray(value) || (isObject(value) && !isEmptyObject(value));
-}
-
-function isEmptyObject(obj: any): boolean {
-  return Object.keys(obj).length === 0;
-}
-
-interface HandleNestedArraysArgs {
-  oldArray: any[];
-  newArray: any[];
-  params: HandleArrayParams;
-}
-
-function handleNestedArrays({
-  oldArray,
-  newArray,
-  params,
-}: HandleNestedArraysArgs): JsonPatch {
-  const {
-    basePath,
-    currentDepth,
-    maxDepth,
-    checkCircular,
-    detectMove,
-    batchArrayOps,
-    maxBatchSize,
-  } = params;
-  const patch: JsonPatch = [];
-  const minLen = Math.min(oldArray.length, newArray.length);
-
-  // Handle common length elements recursively
-  for (let i = 0; i < minLen; i++) {
-    const oldVal = oldArray[i];
-    const newVal = newArray[i];
-    if (!deepEqual(oldVal, newVal)) {
-      patch.push(
-        ...createPatch({
-          oldObj: oldVal,
-          newObj: newVal,
-          params: {
-            basePath: `${basePath}/${i}`,
-            currentDepth: currentDepth + 1,
-            maxDepth,
-            checkCircular,
-            detectMove,
-            batchArrayOps,
-            maxBatchSize,
-          },
-        })
-      );
-    }
-  }
-
-  // Handle added elements
-  for (let i = minLen; i < newArray.length; i++) {
-    patch.push({
-      op: 'add',
-      path: `${basePath}/${i}`,
-      value: newArray[i],
-    });
-  }
-
-  // Handle removed elements
-  for (let i = newArray.length; i < oldArray.length; i++) {
-    patch.push({
-      op: 'remove',
-      path: `${basePath}/${oldArray.length - 1 - (i - newArray.length)}`,
-    });
-  }
-
-  return patch;
+function concatPath(basePath: string, key: string | number): string {
+  return basePath + '/' + escapePointerSegment(String(key));
 }
 
 interface HandleObjectsArgs {
@@ -321,11 +364,4 @@ function handleObjects({
   }
 
   return patch;
-}
-
-function concatPath(basePath: string, key: string | number): string {
-  if (!basePath) {
-    return '/' + escapePointerSegment(String(key));
-  }
-  return basePath + '/' + escapePointerSegment(String(key));
 }

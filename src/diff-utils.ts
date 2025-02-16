@@ -35,7 +35,31 @@ export function diffArrayWithLCS(
     throw PatchError.circularReference(basePath);
   }
 
-  // Generate base operations and convert to JSON Patch
+  // 基本的な配列変更の場合は単純な操作を使用
+  const isSimpleChange =
+    oldArr.length === newArr.length &&
+    oldArr.length <= 3 &&
+    oldArr.filter((v, i) => v !== newArr[i]).length === 1;
+
+  if (isSimpleChange) {
+    const patch: JsonPatch = [];
+    for (let i = 0; i < oldArr.length; i++) {
+      if (oldArr[i] !== newArr[i]) {
+        patch.push({
+          op: 'remove',
+          path: `${basePath}/${i}`,
+        });
+        patch.push({
+          op: 'add',
+          path: `${basePath}/${i}`,
+          value: newArr[i],
+        });
+      }
+    }
+    return patch;
+  }
+
+  // 複雑な変換の場合は最適化された操作を使用
   const operations = generateArrayOperations(oldArr, newArr);
 
   let patch: JsonPatch;

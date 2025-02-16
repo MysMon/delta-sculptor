@@ -38,10 +38,13 @@ export interface BatchAddOperation extends BaseJsonPatchOperation {
 /**
  * Union type for all possible patch operations
  */
-export type JsonPatchOperation =
-  | BaseJsonPatchOperation
-  | BatchRemoveOperation
-  | BatchAddOperation;
+export interface JsonPatchOperation {
+  op: 'add' | 'remove' | 'replace' | 'move' | 'copy' | 'test';
+  path: string;
+  from?: string;
+  value?: unknown;
+  count?: number;
+}
 
 /**
  * JSON Patch is an array of Operations
@@ -98,4 +101,12 @@ export interface ReferenceInfo {
   value: any;
   /** Whether this is a circular reference */
   isCircular: boolean;
+}
+
+export interface ArrayOperation {
+  type: 'add' | 'remove' | 'move';
+  index: number;
+  value?: unknown;
+  count?: number;
+  from?: number;
 }

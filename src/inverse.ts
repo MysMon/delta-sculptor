@@ -1,267 +1,387 @@
-import { optimizeJsonPatch } from './array-utils';
 import { PatchError, PatchErrorCode } from './errors';
-import { applyOperation, PatchOptions } from './patch';
-import { JsonPatch, JsonPatchOperation, Patchable } from './types';
+import { applyOperation } from './patch';
+import { JsonPatch, BatchRemoveOperation } from './types';
 import { getValueByPointer } from './utils';
-import { deepClone, validatePatch, validateJsonPointer } from './validate';
+import { deepClone } from './validate';
 
 /**
- * Map of operation types to their inverse operations
+ * Normalizes array paths by converting '-' to the actual index
  */
-const INVERSE_OPS = {
-  add: 'remove',
-  remove: 'add',
-  replace: 'replace',
-  move: 'move',
-  copy: null, // copy operation doesn't need to be reversed
-  test: null, // test operation doesn't need to be reversed
-} as const;
-
-export interface InversePatchOptions extends PatchOptions {
-  /**
-   * Whether to validate the inverse patch before returning
-   */
-  validateInverse?: boolean;
-
-  /**
-   * Whether to optimize array operations by combining sequential operations
-   */
-  batchArrayOps?: boolean;
-
-  /**
-   * Maximum size of batched array operations
-   */
-  maxBatchSize?: number;
+function normalizeArrayPath(target: any, path: string): string {
+  const segments = path.split('/');
+  if (segments[segments.length - 1] === '-') {
+    const parent = segments.slice(0, -1).reduce((obj, segment, i) => {
+      return i === 0 ? obj : obj[segment];
+    }, target);
+    if (Array.isArray(parent)) {
+      segments[segments.length - 1] = String(parent.length);
+    }
+  }
+  return segments.join('/');
 }
 
-const defaultOptions: Required<InversePatchOptions> = {
+function validateArrayIndex(
+  array: any[],
+  index: number,
+  path: string,
+  isAdd: boolean = false
+): void {
+  if (isNaN(index) || index < 0) {
+    throw PatchError.arrayIndexError(path, String(index));
+  }
+  // add操作の場合は配列の長さまでのインデックスを許可
+  if (isAdd) {
+    if (index > array.length) {
+      throw PatchError.arrayIndexError(path, String(index));
+    }
+  } else {
+    if (index >= array.length) {
+      throw PatchError.arrayIndexError(path, String(index));
+    }
+  }
+}
+
+export interface InverseOptions {
+  batchArrayOps?: boolean;
+  validate?: boolean;
+  checkCircular?: boolean;
+  maxDepth?: number;
+}
+
+const defaultOptions: Required<InverseOptions> = {
+  batchArrayOps: true,
   validate: true,
   checkCircular: true,
   maxDepth: 100,
-  validateInverse: true,
-  batchArrayOps: true,
-  maxBatchSize: Infinity,
 };
-
-/**
- * Validates a patch operation and its path
- */
-function validateOperation(op: JsonPatchOperation): void {
-  if (!op.op || !(op.op in INVERSE_OPS)) {
-    throw new PatchError(
-      PatchErrorCode.INVALID_OPERATION,
-      `Invalid operation type: ${op.op}`
-    );
-  }
-
-  if (!op.path) {
-    throw new PatchError(
-      PatchErrorCode.MISSING_REQUIRED_FIELD,
-      'Path is required'
-    );
-  }
-
-  validateJsonPointer(op.path);
-
-  if (op.op === 'move' && !op.from) {
-    throw new PatchError(
-      PatchErrorCode.MISSING_REQUIRED_FIELD,
-      'Move operation requires "from" field'
-    );
-  }
-}
 
 /**
  * Creates an inverse patch that will undo the effects of the original patch
  */
-export function createInversePatch<T extends Patchable>(
-  originalObj: T,
+export function createInversePatch(
+  originalState: any,
   patch: JsonPatch,
-  options: InversePatchOptions = {}
+  options: InverseOptions = {}
 ): JsonPatch {
-  const opts = { ...defaultOptions, ...options };
+  const inverse: JsonPatch = [];
+  const { batchArrayOps = true } = options;
 
-  if (opts.validate) {
-    validatePatch(patch);
-  }
-
-  const tempObj = deepClone(originalObj);
-  let inversePatch: JsonPatch = [];
-
-  // Create inverse operations in reverse order
+  // パッチを逆順に処理し、深さ優先で適用
   for (let i = patch.length - 1; i >= 0; i--) {
-    const op = patch[i];
-    validateOperation(op);
+    const operation = patch[i];
+    const normalizedPath = normalizeArrayPath(originalState, operation.path);
+    const pathSegments = normalizedPath.split('/');
+    const parentPath =
+      pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') : '';
 
-    const inversedOp = createInverseOperation(tempObj, op);
-    if (inversedOp) {
-      inversePatch.push(inversedOp);
+    // 親パスが存在するか確認
+    const parent =
+      parentPath === ''
+        ? originalState
+        : getValueByPointer(originalState, parentPath);
+    if (parent === undefined) {
+      throw PatchError.pathNotFound(parentPath || '/');
     }
 
-    try {
-      applyOperation(tempObj, op, opts);
-    } catch (error) {
-      // If operation fails, we don't need to rollback since we're working on a clone
-      throw new PatchError(
-        PatchErrorCode.INVALID_OPERATION,
-        `Failed to apply operation: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
+    // 配列操作の特別な処理
+    if (Array.isArray(parent)) {
+      const lastSegment = pathSegments[pathSegments.length - 1];
+      const index = parseInt(lastSegment, 10);
 
-  // Optimize and validate the inverse patch
-  if (opts.batchArrayOps) {
-    inversePatch = optimizeJsonPatch(inversePatch);
-  }
+      switch (operation.op) {
+        case 'add': {
+          validateArrayIndex(parent, index, normalizedPath, true);
+          if (batchArrayOps) {
+            const count = Array.isArray(operation.value)
+              ? operation.value.length
+              : 1;
+            inverse.push({
+              op: 'remove',
+              path: normalizedPath,
+              ...(count > 1 && { count }),
+            });
+          } else {
+            // 配列操作の最適化が無効の場合は個別の操作を生成
+            if (Array.isArray(operation.value)) {
+              operation.value.forEach(_ => {
+                inverse.push({
+                  op: 'remove',
+                  path: normalizedPath,
+                });
+              });
+            } else {
+              inverse.push({
+                op: 'remove',
+                path: normalizedPath,
+              });
+            }
+          }
+          break;
+        }
+        case 'remove': {
+          validateArrayIndex(parent, index, normalizedPath);
+          const count = (operation as BatchRemoveOperation).count || 1;
+          const values = parent.slice(index, index + count);
+          if (batchArrayOps) {
+            inverse.push({
+              op: 'add',
+              path: normalizedPath,
+              value: count === 1 ? values[0] : values,
+            });
+          } else {
+            // 配列操作の最適化が無効の場合は個別の操作を生成
+            values.forEach((value, idx) => {
+              inverse.push({
+                op: 'add',
+                path: `${normalizedPath.slice(0, normalizedPath.lastIndexOf('/'))}/${index + idx}`,
+                value,
+              });
+            });
+          }
+          break;
+        }
+        case 'move': {
+          if (!operation.from) {
+            throw PatchError.missingField('move', 'from');
+          }
+          const fromPath = normalizeArrayPath(originalState, operation.from);
+          const toPath = normalizeArrayPath(originalState, normalizedPath);
 
-  if (opts.validateInverse) {
-    validatePatch(inversePatch);
-  }
+          // 移動元の値を確認
+          const value = getValueByPointer(originalState, fromPath);
+          if (value === undefined) {
+            throw PatchError.pathNotFound(fromPath);
+          }
 
-  return inversePatch.filter(op => op !== undefined) as JsonPatch;
-}
+          // 移動先のパスが移動元のパスのプレフィックスでないことを確認
+          if (toPath.startsWith(fromPath + '/')) {
+            throw new PatchError(
+              PatchErrorCode.INVALID_OPERATION,
+              `'move' operation: destination path cannot be a prefix of source path`
+            );
+          }
 
-/**
- * Safely retrieves a value from an object using a JSON pointer.
- * Throws a detailed error if the path is invalid or value doesn't exist.
- */
-function safeGetValue<T extends Patchable>(obj: T, path: string): any {
-  try {
-    const value = getValueByPointer(obj, path);
-    if (value === undefined) {
-      throw new PatchError(
-        PatchErrorCode.INVALID_POINTER,
-        `No value exists at path: ${path}`
-      );
-    }
-    return value;
-  } catch (error) {
-    throw new PatchError(
-      PatchErrorCode.INVALID_POINTER,
-      error instanceof Error ? error.message : `Invalid path: ${path}`
-    );
-  }
-}
+          // 移動先の親パスを検証
+          const toSegments = toPath.split('/').filter(Boolean);
+          if (toSegments.length > 0) {
+            let current = originalState;
 
-function handleBatchRemoveInverse(
-  obj: any,
-  path: string,
-  count: number
-): JsonPatchOperation {
-  const values = [];
-  const segments = path.split('/');
-  const basePath = segments.slice(0, -1).join('/');
-  const startIndex = parseInt(segments[segments.length - 1], 10);
+            // 親パスが存在するか確認し、必要に応じて作成
+            if (toSegments.length > 1) {
+              for (let i = 0; i < toSegments.length - 1; i++) {
+                const segment = toSegments[i];
+                const parentPath = '/' + toSegments.slice(0, i + 1).join('/');
+                const parent = getValueByPointer(originalState, parentPath);
 
-  for (let i = 0; i < count; i++) {
-    const value = safeGetValue(obj, `${basePath}/${startIndex + i}`);
-    values.push(value);
-  }
+                if (parent === undefined) {
+                  // 次のセグメントが数値の場合は配列を作成、そうでない場合はオブジェクトを作成
+                  const nextSegment = toSegments[i + 1];
+                  const newValue = /^\d+$/.test(nextSegment) ? [] : {};
+                  if (i === 0) {
+                    current[segment] = newValue;
+                  } else {
+                    const prevParent = getValueByPointer(
+                      originalState,
+                      '/' + toSegments.slice(0, i).join('/')
+                    );
+                    if (prevParent) {
+                      prevParent[segment] = newValue;
+                    }
+                  }
+                  current = newValue;
+                } else {
+                  current = parent;
+                }
+              }
+            }
 
-  return {
-    op: 'add',
-    path: basePath + '/' + startIndex,
-    value: values,
-  };
-}
+            // 移動先に値を設定
+            const lastSegment = toSegments[toSegments.length - 1];
+            const valueCopy = deepClone(value); // 値のディープコピーを作成
 
-function handleAddInverse(op: JsonPatchOperation): JsonPatchOperation {
-  return Array.isArray(op.value)
-    ? {
-        op: 'remove',
-        path: op.path,
-        count: op.value.length,
+            if (Array.isArray(current)) {
+              const index = parseInt(lastSegment, 10);
+              validateArrayIndex(current, index, toPath, true);
+              current.splice(index, 0, valueCopy);
+            } else {
+              current[lastSegment] = valueCopy;
+            }
+
+            // 移動元の値を削除
+            const fromSegments = fromPath.split('/').filter(Boolean);
+            const fromParent =
+              fromSegments.length > 1
+                ? getValueByPointer(
+                    originalState,
+                    '/' + fromSegments.slice(0, -1).join('/')
+                  )
+                : originalState;
+            const fromLastSegment = fromSegments[fromSegments.length - 1];
+
+            if (Array.isArray(fromParent)) {
+              const fromIndex = parseInt(fromLastSegment, 10);
+              validateArrayIndex(fromParent, fromIndex, fromPath);
+              fromParent.splice(fromIndex, 1);
+            } else {
+              delete fromParent[fromLastSegment];
+            }
+          }
+
+          inverse.push({
+            op: 'move',
+            path: fromPath,
+            from: toPath,
+          });
+          break;
+        }
+        case 'replace': {
+          const originalValue = getValueByPointer(
+            originalState,
+            normalizedPath
+          );
+          if (originalValue === undefined) {
+            throw PatchError.pathNotFound(normalizedPath);
+          }
+          inverse.push({
+            op: 'replace',
+            path: normalizedPath,
+            value: deepClone(originalValue),
+          });
+          break;
+        }
+        case 'copy':
+        case 'test':
+          continue;
+        default:
+          throw PatchError.invalidOperation(String(operation.op));
       }
-    : {
-        op: 'remove',
-        path: op.path,
-      };
-}
-
-function handleRemoveInverse(
-  obj: any,
-  op: JsonPatchOperation
-): JsonPatchOperation {
-  try {
-    const count = 'count' in op ? op.count : undefined;
-    return typeof count === 'number'
-      ? handleBatchRemoveInverse(obj, op.path, count)
-      : {
-          op: 'add',
-          path: op.path,
-          value: safeGetValue(obj, op.path),
-        };
-  } catch (error) {
-    if (error instanceof PatchError) {
-      throw error;
+    } else {
+      // 非配列操作の処理
+      switch (operation.op) {
+        case 'add': {
+          inverse.push({
+            op: 'remove',
+            path: normalizedPath,
+          });
+          break;
+        }
+        case 'remove': {
+          const originalValue = getValueByPointer(
+            originalState,
+            normalizedPath
+          );
+          if (originalValue === undefined) {
+            throw PatchError.pathNotFound(normalizedPath);
+          }
+          inverse.push({
+            op: 'add',
+            path: normalizedPath,
+            value: deepClone(originalValue),
+          });
+          break;
+        }
+        case 'replace': {
+          const originalValue = getValueByPointer(
+            originalState,
+            normalizedPath
+          );
+          if (originalValue === undefined) {
+            throw PatchError.pathNotFound(normalizedPath);
+          }
+          inverse.push({
+            op: 'replace',
+            path: normalizedPath,
+            value: deepClone(originalValue),
+          });
+          break;
+        }
+        case 'move': {
+          if (!operation.from) {
+            throw PatchError.missingField('move', 'from');
+          }
+          const fromPath = normalizeArrayPath(originalState, operation.from);
+          const value = getValueByPointer(originalState, normalizedPath);
+          if (value === undefined) {
+            throw PatchError.pathNotFound(normalizedPath);
+          }
+          inverse.push({
+            op: 'move',
+            path: fromPath,
+            from: normalizedPath,
+          });
+          break;
+        }
+        case 'copy':
+        case 'test':
+          continue;
+        default:
+          throw PatchError.invalidOperation(String(operation.op));
+      }
     }
-    throw new PatchError(
-      PatchErrorCode.INVALID_POINTER,
-      `Invalid path: ${op.path}`
-    );
   }
-}
 
-function handleReplaceInverse(
-  obj: any,
-  op: JsonPatchOperation
-): JsonPatchOperation {
-  try {
-    return {
-      op: 'replace',
-      path: op.path,
-      value: safeGetValue(obj, op.path),
-    };
-  } catch (error) {
-    if (error instanceof PatchError) {
-      throw error;
-    }
-    throw new PatchError(
-      PatchErrorCode.INVALID_POINTER,
-      `Invalid path: ${op.path}`
-    );
+  // 配列操作の最適化
+  if (batchArrayOps) {
+    optimizeArrayOperations(inverse);
   }
-}
 
-function handleMoveInverse(op: JsonPatchOperation): JsonPatchOperation {
-  if (!op.from) {
-    throw new PatchError(
-      PatchErrorCode.MISSING_REQUIRED_FIELD,
-      'Move operation requires "from" field'
-    );
-  }
-  return {
-    op: 'move',
-    path: op.from,
-    from: op.path,
-  };
+  return inverse;
 }
 
 /**
- * Creates an inverse operation for a single patch operation
+ * 配列操作を最適化する
  */
-function createInverseOperation(
-  obj: any,
-  op: JsonPatchOperation
-): JsonPatchOperation | null {
-  switch (op.op) {
-    case 'add':
-      return handleAddInverse(op);
-    case 'remove':
-      return handleRemoveInverse(obj, op);
-    case 'replace':
-      return handleReplaceInverse(obj, op);
-    case 'move':
-      return handleMoveInverse(op);
-    case 'copy':
-    case 'test':
-      // These operations don't need to be reversed
-      return null;
-    default:
-      throw new PatchError(
-        PatchErrorCode.INVALID_OPERATION,
-        `Invalid operation type: ${(op as any).op}`
+function optimizeArrayOperations(patch: JsonPatch): void {
+  // 連続する配列操作をマージ
+  for (let i = patch.length - 1; i > 0; i--) {
+    const current = patch[i];
+    const prev = patch[i - 1];
+
+    if (
+      current.op === 'add' &&
+      prev.op === 'add' &&
+      current.path === prev.path &&
+      Array.isArray(current.value) &&
+      Array.isArray(prev.value)
+    ) {
+      // 連続するadd操作をマージ
+      prev.value = [...prev.value, ...current.value];
+      patch.splice(i, 1);
+    } else if (
+      current.op === 'remove' &&
+      prev.op === 'remove' &&
+      current.path === prev.path
+    ) {
+      // 連続するremove操作をマージ
+      const currentCount = (current as BatchRemoveOperation).count || 1;
+      const prevCount = (prev as BatchRemoveOperation).count || 1;
+      (prev as BatchRemoveOperation).count = prevCount + currentCount;
+      patch.splice(i, 1);
+    } else if (
+      current.op === 'add' &&
+      prev.op === 'add' &&
+      current.path.slice(0, current.path.lastIndexOf('/')) ===
+        prev.path.slice(0, prev.path.lastIndexOf('/'))
+    ) {
+      // 同じ配列への連続するadd操作を個別の操作として保持
+      const currentIndex = parseInt(
+        current.path.slice(current.path.lastIndexOf('/') + 1),
+        10
       );
+      const prevIndex = parseInt(
+        prev.path.slice(prev.path.lastIndexOf('/') + 1),
+        10
+      );
+      if (currentIndex === prevIndex + 1) {
+        // インデックスが連続している場合はマージ
+        if (Array.isArray(prev.value)) {
+          prev.value = [...prev.value, current.value];
+        } else {
+          prev.value = [prev.value, current.value];
+        }
+        patch.splice(i, 1);
+      }
+    }
   }
 }
 
@@ -271,32 +391,21 @@ function createInverseOperation(
 export function applyPatchWithInverse(
   target: any,
   patch: JsonPatch,
-  options: InversePatchOptions = {}
+  options: InverseOptions = {}
 ): JsonPatch {
   const opts = { ...defaultOptions, ...options };
-
-  if (opts.validate) {
-    validatePatch(patch);
-  }
-
-  const inverse = createInversePatch(target, patch, opts);
-  const tempTarget = deepClone(target);
+  const original = deepClone(target);
+  const inversePatch = createInversePatch(original, patch, opts);
 
   try {
-    // Apply the original patch
     for (const op of patch) {
-      applyOperation(tempTarget, op, opts);
+      applyOperation(target, op, opts);
     }
-
-    // Copy changes back to original target
-    Object.keys(target).forEach(key => delete target[key]);
-    Object.assign(target, tempTarget);
-
-    return inverse;
   } catch (error) {
-    // Restore original state
-    Object.keys(target).forEach(key => delete target[key]);
-    Object.assign(target, deepClone(tempTarget));
+    // エラーが発生した場合は、元の状態に戻す
+    Object.assign(target, original);
     throw error;
   }
+
+  return inversePatch;
 }

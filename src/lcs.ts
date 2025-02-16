@@ -2,6 +2,8 @@
  * LCS (Longest Common Subsequence) implementation with memoization
  */
 
+import { deepEqual } from './utils';
+
 interface LCSResult {
   indices: number[];
   length: number;
@@ -65,6 +67,10 @@ const lcsCache = createMemoCache<LCSResult>();
  * Computes the longest common subsequence between two arrays
  */
 export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
+  if (arr1.length === 0 || arr2.length === 0) {
+    return [];
+  }
+
   const key = getLCSCacheKey(arr1, arr2);
   const cached = lcsCache.get(key);
   if (cached) {
@@ -75,10 +81,10 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
     .fill(0)
     .map(() => Array(arr2.length + 1).fill(0));
 
-  // Build LCS matrix
+  // Build LCS matrix with deep equality comparison
   for (let i = 1; i <= arr1.length; i++) {
     for (let j = 1; j <= arr2.length; j++) {
-      if (arr1[i - 1] === arr2[j - 1]) {
+      if (deepEqual(arr1[i - 1], arr2[j - 1])) {
         matrix[i][j] = matrix[i - 1][j - 1] + 1;
       } else {
         matrix[i][j] = Math.max(matrix[i - 1][j], matrix[i][j - 1]);
@@ -92,7 +98,7 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
   let j = arr2.length;
 
   while (i > 0 && j > 0) {
-    if (arr1[i - 1] === arr2[j - 1]) {
+    if (deepEqual(arr1[i - 1], arr2[j - 1])) {
       result.unshift(i - 1);
       i--;
       j--;
@@ -104,10 +110,11 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
   }
 
   // Cache the result
-  lcsCache.set(key, {
+  const lcsResult = {
     indices: result,
     length: matrix[arr1.length][arr2.length],
-  });
+  };
+  lcsCache.set(key, lcsResult);
 
   return result;
 }
@@ -116,7 +123,7 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
  * Creates a cache key for LCS operations
  */
 function getLCSCacheKey<T>(arr1: T[], arr2: T[]): string {
-  // Use array lengths and hash of first/last elements for better cache keys
+  // より詳細なキャッシュキーを生成
   const hash1 = hashArray(arr1);
   const hash2 = hashArray(arr2);
   return `${arr1.length}:${arr2.length}:${hash1}:${hash2}`;
@@ -125,29 +132,49 @@ function getLCSCacheKey<T>(arr1: T[], arr2: T[]): string {
 function hashArray<T>(arr: T[]): string {
   if (arr.length === 0) return '0';
 
-  // Calculate a rolling hash using more elements
+  // サンプリングポイントを増やして精度を向上
+  const samplePoints = Math.min(20, arr.length);
+  const step = Math.max(1, Math.floor(arr.length / samplePoints));
+
   let hash = '';
-  const step = Math.max(1, Math.floor(arr.length / 10)); // Sample ~10 elements
   for (let i = 0; i < arr.length; i += step) {
     hash += hashValue(arr[i]) + ':';
   }
+
+  // 末尾の要素も含める
+  if (arr.length > 1 && (arr.length - 1) % step !== 0) {
+    hash += hashValue(arr[arr.length - 1]);
+  }
+
   return hash;
 }
 
 function hashValue(value: any): string {
   if (value === null) return 'n';
   if (value === undefined) return 'u';
+
   if (typeof value === 'object') {
-    if (typeof value.id !== 'undefined') return `i${value.id}`;
-    if (typeof value.key !== 'undefined') return `k${value.key}`;
-    if (Array.isArray(value)) return `a${value.length}`;
-    return 'o';
+    if (Array.isArray(value)) {
+      // 配列の場合は長さと最初の要素をハッシュに含める
+      return `a${value.length}:${hashValue(value[0])}`;
+    }
+    if (value.id !== undefined) return `i${value.id}`;
+    if (value.key !== undefined) return `k${value.key}`;
+    // オブジェクトの場合はキーの数を含める
+    return `o${Object.keys(value).length}`;
   }
-  // Use type-specific prefixes to avoid collisions
+
   const type = typeof value;
-  if (type === 'number') return `d${value}`;
-  if (type === 'boolean') return `b${value}`;
-  return `s${String(value)}`;
+  switch (type) {
+    case 'number':
+      return `d${value}`;
+    case 'boolean':
+      return `b${value}`;
+    case 'string':
+      return `s${value.length}:${value.slice(0, 10)}`;
+    default:
+      return `x${String(value)}`;
+  }
 }
 
 /**
@@ -161,6 +188,9 @@ export function clearLCSCache(): void {
  * Get similarity score between two arrays (0-1)
  */
 export function getArraySimilarity<T>(arr1: T[], arr2: T[]): number {
+  if (arr1.length === 0 && arr2.length === 0) return 1;
+  if (arr1.length === 0 || arr2.length === 0) return 0;
+
   const key = getLCSCacheKey(arr1, arr2);
   const cached = lcsCache.get(key);
 
@@ -169,5 +199,13 @@ export function getArraySimilarity<T>(arr1: T[], arr2: T[]): number {
   }
 
   const lcs = findLCS(arr1, arr2);
-  return lcs.length / Math.max(arr1.length, arr2.length);
+  const similarity = lcs.length / Math.max(arr1.length, arr2.length);
+
+  // キャッシュに結果を保存
+  lcsCache.set(key, {
+    indices: lcs,
+    length: lcs.length,
+  });
+
+  return similarity;
 }

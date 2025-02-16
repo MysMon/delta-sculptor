@@ -11,6 +11,7 @@ export enum PatchErrorCode {
   TYPE_MISMATCH = 'TYPE_MISMATCH',
   MAX_DEPTH_EXCEEDED = 'MAX_DEPTH_EXCEEDED',
   INTERNAL_ERROR = 'INTERNAL_ERROR',
+  PATH_NOT_FOUND = 'PATH_NOT_FOUND',
 }
 
 export class PatchError extends Error {
@@ -29,6 +30,14 @@ export class PatchError extends Error {
     return new PatchError(
       PatchErrorCode.INVALID_POINTER,
       `Invalid JSON Pointer: ${path}`,
+      path
+    );
+  }
+
+  static pathNotFound(path: string): PatchError {
+    return new PatchError(
+      PatchErrorCode.PATH_NOT_FOUND,
+      `Path not found: ${path}`,
       path
     );
   }
@@ -113,5 +122,9 @@ export class PatchError extends Error {
       `Maximum depth of ${maxDepth} exceeded at path: ${path}`,
       path
     );
+  }
+
+  static invalidPointerFormat(message: string): PatchError {
+    return new PatchError(PatchErrorCode.INVALID_POINTER, message);
   }
 }

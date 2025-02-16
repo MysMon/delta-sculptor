@@ -2,7 +2,6 @@ import { PatchError, PatchErrorCode } from './errors';
 import { JsonPatch, JsonPatchOperation } from './types';
 import { getValueByPointer, setValueByPointer, removeByPointer } from './utils';
 import {
-  validatePatch,
   validateJsonPointer,
   deepEqual,
   deepClone,
@@ -35,12 +34,100 @@ const defaultOptions: Required<PatchOptions> = {
   maxDepth: 100,
 };
 
-function handleAddOperation(target: any, path: string, value: any): void {
-  setValueByPointer(target, path, value);
+function validateArrayIndex(
+  current: any[],
+  index: number,
+  path: string,
+  operation: string
+): void {
+  if (isNaN(index) || index < 0) {
+    throw PatchError.arrayIndexError(path, String(index));
+  }
+
+  // 'add'操作の場合は配列の長さまでのインデックスを許可
+  if (operation === 'add' && index > current.length) {
+    throw PatchError.arrayIndexError(path, String(index));
+  }
+  // その他の操作では配列の範囲内のインデックスのみ許可
+  else if (operation !== 'add' && index >= current.length) {
+    throw PatchError.arrayIndexError(path, String(index));
+  }
 }
 
-function handleRemoveOperation(target: any, path: string): void {
-  removeByPointer(target, path);
+function handleAddOperation(target: any, path: string, value: any): void {
+  const segments = path.split('/').slice(1);
+  let current = target;
+
+  for (let i = 0; i < segments.length - 1; i++) {
+    const segment = segments[i];
+    if (!(segment in current)) {
+      current[segment] = /^\d+$/.test(segments[i + 1]) ? [] : {};
+    }
+    current = current[segment];
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  if (Array.isArray(current)) {
+    if (lastSegment === '-') {
+      if (Array.isArray(value)) {
+        current.push(...value);
+      } else {
+        current.push(value);
+      }
+    } else {
+      const index = parseInt(lastSegment, 10);
+      validateArrayIndex(current, index, path, 'add');
+      if (Array.isArray(value)) {
+        current.splice(index, 0, ...value);
+      } else {
+        current.splice(index, 0, value);
+      }
+    }
+  } else {
+    current[lastSegment] = value;
+  }
+}
+
+function handleRemoveOperation(
+  target: any,
+  path: string,
+  op: JsonPatchOperation
+): void {
+  const segments = path.split('/').slice(1);
+  let current = target;
+
+  // 親要素まで移動
+  for (let i = 0; i < segments.length - 1; i++) {
+    const segment = segments[i];
+    if (!(segment in current)) {
+      throw PatchError.invalidPointer(path);
+    }
+    current = current[segment];
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  if (Array.isArray(current)) {
+    if (lastSegment === '-') {
+      throw PatchError.arrayIndexError(path, lastSegment);
+    }
+    const index = parseInt(lastSegment, 10);
+    validateArrayIndex(current, index, path, 'remove');
+    const count = (op as any).count || 1;
+    if (index + count > current.length) {
+      throw PatchError.arrayIndexError(path, String(index + count - 1));
+    }
+    const removed = current.splice(index, count);
+    // 削除した要素を返す（逆パッチ生成のために必要）
+    return removed.length === 1 ? removed[0] : removed;
+  } else {
+    if (!(lastSegment in current)) {
+      throw PatchError.invalidPointer(path);
+    }
+    const removed = current[lastSegment];
+    delete current[lastSegment];
+    // 削除した要素を返す（逆パッチ生成のために必要）
+    return removed;
+  }
 }
 
 function handleReplaceOperation(target: any, path: string, value: any): void {
@@ -95,6 +182,18 @@ function handleTestOperation(target: any, path: string, value: any): void {
   }
 }
 
+function validatePathDepth(path: string, maxDepth?: number): void {
+  if (maxDepth === undefined) return;
+
+  const depth = path.split('/').length - 1;
+  if (depth > maxDepth) {
+    throw new PatchError(
+      PatchErrorCode.MAX_DEPTH_EXCEEDED,
+      `Maximum path depth of ${maxDepth} exceeded: ${path}`
+    );
+  }
+}
+
 /**
  * Applies a single operation to the target object
  */
@@ -103,44 +202,94 @@ export function applyOperation(
   op: JsonPatchOperation,
   options: PatchOptions = {}
 ): void {
-  const { checkCircular = true } = { ...defaultOptions, ...options };
+  const {
+    checkCircular = true,
+    maxDepth,
+    validate = true,
+  } = {
+    ...defaultOptions,
+    ...options,
+  };
   const { op: operation, path, from, value } = op;
 
-  // Validate path
-  validateJsonPointer(path);
+  // validate: true の場合のみ実行する検証
+  if (validate) {
+    if (!operation) {
+      throw PatchError.invalidOperation('undefined');
+    }
 
-  // Check for circular references
-  if (checkCircular && value !== undefined && detectCircular(value)) {
-    throw PatchError.circularReference(path);
+    if (!path && operation !== 'test') {
+      throw PatchError.missingField(operation || 'undefined', 'path');
+    }
+
+    // 必須フィールドの検証
+    if (operation !== 'remove' && operation !== 'test' && value === undefined) {
+      if (operation === 'add' || operation === 'replace') {
+        throw PatchError.missingField(operation, 'value');
+      }
+    }
+
+    if ((operation === 'move' || operation === 'copy') && !from) {
+      throw PatchError.missingField(operation, 'from');
+    }
+
+    if (path) {
+      validateJsonPointer(path);
+      validatePathDepth(path, maxDepth);
+    }
+
+    // Check for circular references
+    if (checkCircular && value !== undefined && detectCircular(value)) {
+      throw PatchError.circularReference(path || '/');
+    }
+
+    // Validate 'from' path depth for move/copy operations
+    if ((operation === 'move' || operation === 'copy') && from) {
+      validateJsonPointer(from);
+      validatePathDepth(from, maxDepth);
+    }
   }
 
-  switch (operation) {
-    case 'add':
-      handleAddOperation(target, path, value);
-      break;
+  // 操作の実行
+  try {
+    switch (operation) {
+      case 'add':
+        handleAddOperation(target, path, value);
+        break;
 
-    case 'remove':
-      handleRemoveOperation(target, path);
-      break;
+      case 'remove':
+        handleRemoveOperation(target, path, op);
+        break;
 
-    case 'replace':
-      handleReplaceOperation(target, path, value);
-      break;
+      case 'replace':
+        handleReplaceOperation(target, path, value);
+        break;
 
-    case 'move':
-      handleMoveOperation(target, path, from as string);
-      break;
+      case 'move':
+        handleMoveOperation(target, path, from);
+        break;
 
-    case 'copy':
-      handleCopyOperation(target, path, from as string);
-      break;
+      case 'copy':
+        handleCopyOperation(target, path, from);
+        break;
 
-    case 'test':
-      handleTestOperation(target, path, value);
-      break;
+      case 'test':
+        handleTestOperation(target, path, value);
+        break;
 
-    default:
-      throw PatchError.invalidOperation(operation);
+      default:
+        if (validate) {
+          throw PatchError.invalidOperation(operation || 'undefined');
+        }
+    }
+  } catch (error) {
+    if (error instanceof PatchError) {
+      throw error;
+    }
+    throw new PatchError(
+      PatchErrorCode.INTERNAL_ERROR,
+      `Internal error: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -154,12 +303,27 @@ export function applyPatch(
 ): void {
   const opts = { ...defaultOptions, ...options };
 
-  if (opts.validate) {
-    validatePatch(patch);
+  // パッチの基本的な検証
+  if (!Array.isArray(patch)) {
+    throw new PatchError(
+      PatchErrorCode.INVALID_PATCH,
+      'Patch must be an array of operations'
+    );
   }
 
+  // 各操作を順番に適用
   for (const op of patch) {
-    applyOperation(target, op, opts);
+    try {
+      applyOperation(target, op, opts);
+    } catch (error) {
+      if (error instanceof PatchError) {
+        throw error;
+      }
+      throw new PatchError(
+        PatchErrorCode.INTERNAL_ERROR,
+        `Internal error: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 }
 
@@ -179,26 +343,84 @@ export function applyPatchImmutable<T>(
 /**
  * Applies patch with automatic rollback on failure
  */
-export function applyPatchWithRollback<T extends object>(
-  target: T,
+export function applyPatchWithRollback(
+  target: any,
   patch: JsonPatch,
   options: PatchOptions = {}
 ): void {
-  const backup = deepClone(target);
+  const opts = { ...defaultOptions, ...options };
+  const originalState = deepClone(target);
+  const appliedOps: JsonPatchOperation[] = [];
+
   try {
-    applyPatch(target, patch, options);
-  } catch (error: unknown) {
-    // Clean target
-    Object.keys(target).forEach(k => delete (target as any)[k]);
-    // Restore from backup
-    Object.assign(target, backup);
-    // Rethrow with context
-    if (error instanceof PatchError) {
-      throw error;
+    // パッチの基本的な検証
+    if (!Array.isArray(patch)) {
+      throw new PatchError(
+        PatchErrorCode.INVALID_PATCH,
+        'Patch must be an array of operations'
+      );
     }
-    throw new PatchError(
-      PatchErrorCode.INTERNAL_ERROR,
-      `Patch application failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+
+    // 各操作を順番に適用
+    for (const op of patch) {
+      try {
+        applyOperation(target, op, opts);
+        appliedOps.push(op);
+      } catch (error) {
+        // ロールバック処理
+        for (let i = appliedOps.length - 1; i >= 0; i--) {
+          const appliedOp = appliedOps[i];
+          try {
+            // 逆操作を適用
+            switch (appliedOp.op) {
+              case 'add':
+                handleRemoveOperation(target, appliedOp.path, appliedOp);
+                break;
+              case 'remove':
+                handleAddOperation(target, appliedOp.path, appliedOp.value);
+                break;
+              case 'replace':
+                handleReplaceOperation(
+                  target,
+                  appliedOp.path,
+                  getValueByPointer(originalState, appliedOp.path)
+                );
+                break;
+              case 'move':
+                if (appliedOp.from) {
+                  handleMoveOperation(target, appliedOp.from, appliedOp.path);
+                }
+                break;
+              case 'copy':
+                handleRemoveOperation(target, appliedOp.path, appliedOp);
+                break;
+              case 'test':
+                // テスト操作はロールバック不要
+                break;
+            }
+          } catch (rollbackError) {
+            // ロールバックに失敗した場合は元の状態に復元
+            Object.assign(target, deepClone(originalState));
+            throw new PatchError(
+              PatchErrorCode.INTERNAL_ERROR,
+              'Failed to rollback changes'
+            );
+          }
+        }
+
+        // 元のエラーを再スロー
+        if (error instanceof PatchError) {
+          throw error;
+        }
+        throw new PatchError(
+          PatchErrorCode.INTERNAL_ERROR,
+          `Internal error: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  } catch (error) {
+    // 外側のtryブロックでもエラーをキャッチして状態を復元
+    Object.assign(target, deepClone(originalState));
+    throw error;
   }
 }
