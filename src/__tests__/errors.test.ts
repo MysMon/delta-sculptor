@@ -100,13 +100,17 @@ describe('PatchError', () => {
     expect(Object.keys(PatchErrorCode)).toEqual([
       'INVALID_POINTER',
       'INVALID_OPERATION',
+      'INVALID_PATCH',
+      'INVALID_TARGET',
       'TEST_OPERATION_FAILED',
       'ARRAY_INDEX_ERROR',
       'MISSING_REQUIRED_FIELD',
       'ROOT_OPERATION_ERROR',
       'CIRCULAR_REFERENCE',
       'TYPE_MISMATCH',
+      'MAX_DEPTH_EXCEEDED',
       'INTERNAL_ERROR',
+      'PATH_NOT_FOUND',
     ]);
   });
 });

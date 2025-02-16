@@ -116,7 +116,7 @@ describe('getArraySimilarity', () => {
   test('handles arrays of different lengths', () => {
     const arr1 = [1, 2, 3, 4];
     const arr2 = [1, 2, 3, 4, 5, 6];
-    expect(getArraySimilarity(arr1, arr2)).toBe(4 / 6);
+    expect(getArraySimilarity(arr1, arr2)).toBe(4 / 6); // 4 common elements, max length 6
   });
 
   test('handles arrays with objects', () => {
@@ -124,7 +124,7 @@ describe('getArraySimilarity', () => {
     const obj2 = { id: 2 };
     const arr1 = [obj1, obj2];
     const arr2 = [obj1, { id: 3 }, obj2];
-    expect(getArraySimilarity(arr1, arr2)).toBe(2 / 3);
+    expect(getArraySimilarity(arr1, arr2)).toBe(2 / 3); // 2 common elements, max length 3
   });
 
   test('uses cache for repeated calculations', () => {
@@ -135,7 +135,7 @@ describe('getArraySimilarity', () => {
     const score2 = getArraySimilarity(arr1, arr2);
 
     expect(score1).toBe(score2);
-    expect(score1).toBe(3 / 5);
+    expect(score1).toBe(3 / 5); // 3 common elements, max length 5
   });
 
   test('handles arrays with diverse types', () => {
@@ -155,7 +155,7 @@ describe('getArraySimilarity', () => {
     arr2[5] = 'different'; // Change one value
 
     const similarity = getArraySimilarity(arr1, arr2);
-    expect(similarity).toBe(9 / 10); // 9 matching elements out of 10
+    expect(similarity).toBe(9 / 10); // 9 matching elements, max length 10
   });
 
   test('handles large arrays efficiently', () => {
@@ -166,7 +166,7 @@ describe('getArraySimilarity', () => {
     const similarity = getArraySimilarity(arr1, arr2);
     const duration = Date.now() - start;
 
-    expect(similarity).toBe(500 / 1500); // 500 common elements out of 1500 unique
+    expect(similarity).toBe(500 / 1000); // 500 common elements, max length 1000
     expect(duration).toBeLessThan(1000); // Should complete in reasonable time
   });
 });

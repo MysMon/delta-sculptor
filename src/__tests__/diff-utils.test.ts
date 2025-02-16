@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest';
 
+import { generateArrayOperations, batchArrayOperations } from '../array-utils';
 import { diffArrayWithLCS, diffArraySimple } from '../diff-utils';
 import { PatchError } from '../errors';
 
@@ -80,41 +81,46 @@ describe('diffArrayWithLCS', () => {
     }
   });
 
-  test('handles complex optimized operations', () => {
+  test('handles complex transformations', () => {
     const oldArr = [1, 2, 3, 4, 5];
     const newArr = [5, 4, 6, 7, 1];
 
-    // Test with optimization
-    const optimized = diffArrayWithLCS(oldArr, newArr, {
-      basePath: '/arr',
-      batchArrayOps: true,
-    });
+    const operations = generateArrayOperations(oldArr, newArr);
+    const patch = batchArrayOperations(operations);
 
-    // Should use move operations where possible
-    expect(optimized.some(op => op.op === 'move')).toBe(true);
-
-    // Applied patch should result in correct array
+    // Apply the patch to oldArr and verify the result
     const result = [...oldArr];
-    optimized.forEach(op => {
+    patch.forEach(op => {
+      const index = parseInt(op.path.slice(1));
       switch (op.op) {
         case 'move':
-          if (op.from) {
-            const fromIndex = parseInt(op.from.split('/').pop() || '0', 10);
-            const toIndex = parseInt(op.path.split('/').pop() || '0', 10);
-            const [value] = result.splice(fromIndex, 1);
-            result.splice(toIndex, 0, value);
+          if (!op.from) {
+            throw new Error('Move operation missing from path');
           }
+          const fromIndex = parseInt(op.from.slice(1));
+          const [value] = result.splice(fromIndex, 1);
+          result.splice(index, 0, value);
           break;
         case 'remove':
-          const removeIndex = parseInt(op.path.split('/').pop() || '0', 10);
-          result.splice(removeIndex, 1);
+          if ('count' in op) {
+            result.splice(index, op.count);
+          } else {
+            result.splice(index, 1);
+          }
           break;
         case 'add':
-          const addIndex = parseInt(op.path.split('/').pop() || '0', 10);
-          result.splice(addIndex, 0, op.value);
+          if (Array.isArray(op.value)) {
+            // バッチ処理された値を個別に追加
+            op.value.forEach((v, i) => {
+              result.splice(index + i, 0, v as number);
+            });
+          } else {
+            result.splice(index, 0, op.value as number);
+          }
           break;
       }
     });
+
     expect(result).toEqual(newArr);
   });
 

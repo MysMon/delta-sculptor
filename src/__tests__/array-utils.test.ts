@@ -16,17 +16,27 @@ import { PatchError } from '../errors';
 describe('validateArrayIndex', () => {
   test('validates valid indices', () => {
     const arr = [1, 2, 3];
-    expect(validateArrayIndex(arr, '/0')).toBe(0);
-    expect(validateArrayIndex(arr, '/2')).toBe(2);
-    expect(validateArrayIndex(arr, '/-')).toBe(3);
+    expect(validateArrayIndex(arr, 0)).toBe(0);
+    expect(validateArrayIndex(arr, 2)).toBe(2);
+    expect(validateArrayIndex(arr, '1')).toBe(1);
+    expect(validateArrayIndex(arr, '-', true)).toBe(3);
   });
 
   test('throws for invalid indices', () => {
     const arr = [1, 2, 3];
-    expect(() => validateArrayIndex(arr, '/4')).toThrow(PatchError);
-    expect(() => validateArrayIndex(arr, '/-1')).toThrow(PatchError);
-    expect(() => validateArrayIndex(arr, '/abc')).toThrow(PatchError);
-    expect(() => validateArrayIndex(arr, '/')).toThrow(PatchError);
+    expect(() => validateArrayIndex(arr, 4)).toThrow(PatchError);
+    expect(() => validateArrayIndex(arr, -1)).toThrow(PatchError);
+    expect(() => validateArrayIndex(arr, 'abc')).toThrow(PatchError);
+    expect(() => validateArrayIndex(arr, '')).toThrow(PatchError);
+    expect(() => validateArrayIndex(arr, 1.5)).toThrow(PatchError);
+  });
+
+  test('handles allowEnd parameter correctly', () => {
+    const arr = [1, 2, 3];
+    expect(validateArrayIndex(arr, 3, true)).toBe(3);
+    expect(() => validateArrayIndex(arr, 3, false)).toThrow(PatchError);
+    expect(validateArrayIndex(arr, '-', true)).toBe(3);
+    expect(validateArrayIndex(arr, '-', false)).toBe(2);
   });
 });
 
@@ -35,7 +45,7 @@ describe('toJsonPatch', () => {
     const operations: ArrayOperation[] = [
       { type: 'add', index: 0, value: 'a' },
       { type: 'remove', index: 1 },
-      { type: 'move', index: 2, fromIndex: 0, value: 'b' },
+      { type: 'move', index: 2, from: 0 },
     ];
 
     const patch = toJsonPatch(operations);
@@ -109,7 +119,7 @@ describe('optimizeArrayOperations', () => {
 
     const optimized = optimizeArrayOperations(operations);
     expect(optimized).toEqual([
-      { type: 'move', index: 2, fromIndex: 1, value: 'b' },
+      { type: 'move', index: 2, from: 1, value: 'b' },
     ]);
   });
 
@@ -191,27 +201,28 @@ describe('generateArrayOperations', () => {
     // Apply the patch to oldArr and verify the result
     const result = [...oldArr];
     patch.forEach(op => {
-      let value;
+      const index = parseInt(op.path.slice(1));
       switch (op.op) {
         case 'move':
           if (!op.from) {
             throw new Error('Move operation missing from path');
           }
-          value = result.splice(parseInt(op.from.slice(1)), 1)[0];
-          result.splice(parseInt(op.path.slice(1)), 0, value);
+          const fromIndex = parseInt(op.from.slice(1));
+          const [value] = result.splice(fromIndex, 1);
+          result.splice(index, 0, value);
           break;
         case 'remove':
           if ('count' in op) {
-            result.splice(parseInt(op.path.slice(1)), op.count);
+            result.splice(index, op.count);
           } else {
-            result.splice(parseInt(op.path.slice(1)), 1);
+            result.splice(index, 1);
           }
           break;
         case 'add':
           if (Array.isArray(op.value)) {
-            result.splice(parseInt(op.path.slice(1)), 0, ...op.value);
+            result.splice(index, 0, ...(op.value as number[]));
           } else {
-            result.splice(parseInt(op.path.slice(1)), 0, op.value);
+            result.splice(index, 0, op.value as number);
           }
           break;
       }

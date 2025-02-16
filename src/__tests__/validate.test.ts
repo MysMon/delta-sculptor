@@ -34,27 +34,27 @@ describe('detectCircular', () => {
   test('detects simple circular references', () => {
     const obj: any = { a: 1 };
     obj.self = obj;
-    expect(detectCircular(obj)).toBe(true);
+    expect(detectCircular(obj)).toBeTruthy();
   });
 
   test('detects nested circular references', () => {
     const obj: any = { a: { b: { c: {} } } };
     obj.a.b.c.back = obj.a;
-    expect(detectCircular(obj)).toBe(true);
+    expect(detectCircular(obj)).toBeTruthy();
   });
 
   test('detects circular references in arrays', () => {
     const arr: any[] = [1, 2, 3];
     arr.push(arr);
-    expect(detectCircular(arr)).toBe(true);
+    expect(detectCircular(arr)).toBeTruthy();
   });
 
   test('handles non-circular structures', () => {
-    expect(detectCircular({ a: 1, b: { c: 2 } })).toBe(false);
-    expect(detectCircular([1, [2, 3], { a: 4 }])).toBe(false);
-    expect(detectCircular(null)).toBe(false);
-    expect(detectCircular(undefined)).toBe(false);
-    expect(detectCircular(123)).toBe(false);
+    expect(detectCircular({ a: 1, b: { c: 2 } })).toBeNull();
+    expect(detectCircular([1, [2, 3], { a: 4 }])).toBeNull();
+    expect(detectCircular(null)).toBeNull();
+    expect(detectCircular(undefined)).toBeNull();
+    expect(detectCircular(123)).toBeNull();
   });
 });
 

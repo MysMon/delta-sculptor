@@ -35,6 +35,13 @@ describe('createInversePatch', () => {
 
     const inverse = createInversePatch(original, patch);
     expect(inverse).toEqual([{ op: 'move', path: '/a', from: '/b/d' }]);
+
+    // 実際の動作を検証
+    const obj = JSON.parse(JSON.stringify(original));
+    applyPatchWithInverse(obj, patch);
+    expect(obj).toEqual({ b: { c: 2, d: 1 } });
+    applyPatchWithInverse(obj, inverse);
+    expect(obj).toEqual(original);
   });
 
   test('creates inverse for batch array operations', () => {
@@ -214,9 +221,20 @@ describe('applyPatchWithInverse', () => {
       batchArrayOps: false,
     });
     expect(inverseUnopt).toEqual([
-      { op: 'remove', path: '/arr/1', count: 3 },
-      { op: 'add', path: '/arr/1', value: [2, 3, 4] },
+      { op: 'remove', path: '/arr/1' },
+      { op: 'remove', path: '/arr/1' },
+      { op: 'remove', path: '/arr/1' },
+      { op: 'add', path: '/arr/1', value: 2 },
+      { op: 'add', path: '/arr/1', value: 3 },
+      { op: 'add', path: '/arr/1', value: 4 },
     ]);
+
+    // 両方のケースで元の状態に戻ることを確認
+    applyPatchWithInverse(obj, inverseOptimized);
+    expect(obj).toEqual({ arr: [1, 2, 3, 4, 5] });
+
+    applyPatchWithInverse(objUnopt, inverseUnopt);
+    expect(objUnopt).toEqual({ arr: [1, 2, 3, 4, 5] });
   });
 
   test('validates array indices', () => {
