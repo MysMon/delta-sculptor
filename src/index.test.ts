@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { DeltaSculptor } from '../index';
-import { JsonPatch } from '../types';
+import { DeltaSculptor } from './index';
+import { JsonPatch } from './types';
 
 describe('DeltaSculptor', () => {
   describe('validatePatch', () => {

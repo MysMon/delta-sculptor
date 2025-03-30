@@ -1,61 +1,14 @@
 import { PatchError, PatchErrorCode } from './errors';
 import {
   JsonPatch,
-  JsonPatchOperation,
   BatchAddOperation,
   BatchRemoveOperation,
   ArrayOperation,
 } from './types';
-import { deepEqual, validateArrayIndex, buildPointer } from './utils';
+import { deepEqual, validateArrayIndex } from './utils';
 
 function buildArrayPath(basePath: string, index: number): string {
   return basePath === '' ? `/${index}` : `${basePath}/${index}`;
-}
-
-function convertToJsonPatchOperation(
-  op: ArrayOperation,
-  basePath: string
-): JsonPatchOperation {
-  const path = buildArrayPath(basePath, op.index);
-
-  switch (op.type) {
-    case 'add':
-      return {
-        op: 'add',
-        path,
-        value: op.value,
-      };
-    case 'remove':
-      if (op.count && op.count > 1) {
-        return {
-          op: 'remove',
-          path,
-          count: op.count,
-        };
-      }
-      return {
-        op: 'remove',
-        path,
-      };
-    case 'move':
-      if (op.from === undefined) {
-        throw new PatchError(
-          PatchErrorCode.MISSING_REQUIRED_FIELD,
-          'From path is required for move operation'
-        );
-      }
-      const fromPath = buildArrayPath(basePath, op.from);
-      return {
-        op: 'move',
-        path,
-        from: fromPath,
-      };
-    default:
-      throw new PatchError(
-        PatchErrorCode.INVALID_OPERATION,
-        `Unknown operation type: ${(op as any).type}`
-      );
-  }
 }
 
 interface JsonPatchOptions {
@@ -123,7 +76,7 @@ export function generateArrayOperations(
   oldArr: unknown[],
   newArr: unknown[]
 ): ArrayOperation[] {
-  const operations: ArrayOperation[] = [];
+  let operations: ArrayOperation[] = [];
   const valueToNewIndex = new Map<unknown, number>();
   const valueToOldIndex = new Map<unknown, number>();
 
@@ -204,46 +157,35 @@ export function generateArrayOperations(
     result.splice(targetIndex, 0, value);
   });
 
-  // 結果を検証
+  // 結果を検証 - 個別操作を生成するように変更
   if (!deepEqual(result, newArr)) {
-    operations.length = 0;
-    if (oldArr.length > 0) {
+    operations = [];
+    // 古い要素を後ろから削除
+    for (let i = oldArr.length - 1; i >= 0; i--) {
       operations.push({
         type: 'remove',
-        index: 0,
-        count: oldArr.length,
+        index: i,
+        count: 1,
       });
     }
-    if (newArr.length > 0) {
+    // 新しい要素を前から追加
+    newArr.forEach((value, i) => {
       operations.push({
         type: 'add',
-        index: 0,
-        value: newArr,
+        index: i,
+        value,
       });
-    }
+    });
   }
 
   return operations;
-}
-
-function _findValueIndex(
-  value: any,
-  array: any[],
-  map: Map<any, number>
-): number {
-  const index = map.get(value);
-  if (typeof index !== 'undefined' && deepEqual(array[index], value)) {
-    return index;
-  }
-  return -1;
 }
 
 /**
  * Optimizes array operations by detecting moves and combining operations
  */
 export function optimizeArrayOperations(
-  operations: ArrayOperation[],
-  maxBatchSize: number = 10
+  operations: ArrayOperation[]
 ): ArrayOperation[] {
   const optimized: ArrayOperation[] = [];
   let i = 0;
@@ -305,23 +247,14 @@ export function batchArrayOperations(
         j++;
       }
 
-      // バッチサイズに基づいて分割
-      for (let k = 0; k < values.length; k += maxBatchSize) {
-        const chunk = values.slice(k, k + maxBatchSize);
-        if (chunk.length === 1) {
-          result.push({
-            op: 'add',
-            path: `/${current.index + k}`,
-            value: chunk[0],
-          });
-        } else {
-          result.push({
-            op: 'add',
-            path: `/${current.index + k}`,
-            value: chunk,
-          });
-        }
-      }
+      // バッチ処理せずに個別のadd操作を生成
+      values.forEach((value, offset) => {
+        result.push({
+          op: 'add',
+          path: `/${current.index + offset}`,
+          value,
+        });
+      });
 
       i = j;
       continue;
@@ -368,17 +301,6 @@ export function batchArrayOperations(
   }
 
   return result;
-}
-
-function _getPathIndex(path: string): number {
-  const match = /\/(\d+|-)$/.exec(path);
-  if (!match) {
-    throw new PatchError(
-      PatchErrorCode.ARRAY_INDEX_ERROR,
-      'Invalid array index in path'
-    );
-  }
-  return match[1] === '-' ? Infinity : parseInt(match[1], 10);
 }
 
 /**

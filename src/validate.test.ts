@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 
-import { PatchError } from '../errors';
-import { JsonPatch } from '../types';
+import { PatchError } from './errors';
+import { JsonPatch } from './types';
 import {
   validateJsonPointer,
   detectCircular,
@@ -9,7 +9,7 @@ import {
   deepEqual,
   deepClone,
   validatePatch,
-} from '../validate';
+} from './validate';
 
 describe('validateJsonPointer', () => {
   test('validates valid pointers', () => {

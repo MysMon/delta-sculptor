@@ -8,7 +8,7 @@ import {
   setValueByPointer,
   removeValueByPointer,
   buildPointer,
-} from '../utils';
+} from './utils';
 
 describe('JSON Pointer utils', () => {
   describe('escapePointerSegment', () => {

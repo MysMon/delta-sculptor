@@ -103,12 +103,12 @@ export function createInversePatch(
           } else {
             // 配列操作の最適化が無効の場合は個別の操作を生成
             if (Array.isArray(operation.value)) {
-              operation.value.forEach(_ => {
+              for (let i = operation.value.length - 1; i >= 0; i--) {
                 inverse.push({
                   op: 'remove',
-                  path: normalizedPath,
+                  path: `${normalizedPath.slice(0, normalizedPath.lastIndexOf('/'))}/${index + i}`,
                 });
-              });
+              }
             } else {
               inverse.push({
                 op: 'remove',
@@ -130,13 +130,13 @@ export function createInversePatch(
             });
           } else {
             // 配列操作の最適化が無効の場合は個別の操作を生成
-            values.forEach((value, idx) => {
+            for (let i = values.length - 1; i >= 0; i--) {
               inverse.push({
                 op: 'add',
-                path: `${normalizedPath.slice(0, normalizedPath.lastIndexOf('/'))}/${index + idx}`,
-                value,
+                path: `${normalizedPath.slice(0, normalizedPath.lastIndexOf('/'))}/${index}`,
+                value: values[i],
               });
-            });
+            }
           }
           break;
         }
@@ -171,14 +171,16 @@ export function createInversePatch(
               for (let i = 0; i < toSegments.length - 1; i++) {
                 const segment = toSegments[i];
                 const parentPath = '/' + toSegments.slice(0, i + 1).join('/');
-                const parent = getValueByPointer(originalState, parentPath);
+                let parent = getValueByPointer(originalState, parentPath);
 
                 if (parent === undefined) {
                   // 次のセグメントが数値の場合は配列を作成、そうでない場合はオブジェクトを作成
                   const nextSegment = toSegments[i + 1];
                   const newValue = /^\d+$/.test(nextSegment) ? [] : {};
+
                   if (i === 0) {
-                    current[segment] = newValue;
+                    originalState[segment] = newValue;
+                    parent = newValue;
                   } else {
                     const prevParent = getValueByPointer(
                       originalState,
@@ -186,12 +188,11 @@ export function createInversePatch(
                     );
                     if (prevParent) {
                       prevParent[segment] = newValue;
+                      parent = newValue;
                     }
                   }
-                  current = newValue;
-                } else {
-                  current = parent;
                 }
+                current = parent;
               }
             }
 
@@ -206,6 +207,36 @@ export function createInversePatch(
             } else {
               current[lastSegment] = valueCopy;
             }
+
+            // 移動元の値を削除（移動先の値を設定した後に削除）
+            const fromSegments = fromPath.split('/').filter(Boolean);
+            const fromParent =
+              fromSegments.length > 1
+                ? getValueByPointer(
+                    originalState,
+                    '/' + fromSegments.slice(0, -1).join('/')
+                  )
+                : originalState;
+            const fromLastSegment = fromSegments[fromSegments.length - 1];
+
+            if (Array.isArray(fromParent)) {
+              const fromIndex = parseInt(fromLastSegment, 10);
+              validateArrayIndex(fromParent, fromIndex, fromPath);
+              fromParent.splice(fromIndex, 1);
+            } else {
+              delete fromParent[fromLastSegment];
+            }
+
+            // 逆操作を生成
+            inverse.push({
+              op: 'move',
+              path: fromPath,
+              from: toPath,
+            });
+          } else {
+            // ルートパスへの移動の場合
+            const valueCopy = deepClone(value);
+            originalState = valueCopy;
 
             // 移動元の値を削除
             const fromSegments = fromPath.split('/').filter(Boolean);
@@ -225,13 +256,14 @@ export function createInversePatch(
             } else {
               delete fromParent[fromLastSegment];
             }
-          }
 
-          inverse.push({
-            op: 'move',
-            path: fromPath,
-            from: toPath,
-          });
+            // 逆操作を生成
+            inverse.push({
+              op: 'move',
+              path: fromPath,
+              from: toPath,
+            });
+          }
           break;
         }
         case 'replace': {
@@ -299,11 +331,19 @@ export function createInversePatch(
           if (!operation.from) {
             throw PatchError.missingField('move', 'from');
           }
-          const fromPath = normalizeArrayPath(originalState, operation.from);
-          const value = getValueByPointer(originalState, normalizedPath);
-          if (value === undefined) {
+          // 移動元パスの存在を確認
+          const fromValue = getValueByPointer(originalState, operation.from);
+          if (fromValue === undefined) {
+            throw PatchError.pathNotFound(operation.from);
+          }
+
+          // 移動先パスの存在を確認
+          const toValue = getValueByPointer(originalState, normalizedPath);
+          if (toValue === undefined) {
             throw PatchError.pathNotFound(normalizedPath);
           }
+
+          const fromPath = normalizeArrayPath(originalState, operation.from);
           inverse.push({
             op: 'move',
             path: fromPath,

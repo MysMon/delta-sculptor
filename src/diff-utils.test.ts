@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'vitest';
 
-import { generateArrayOperations, batchArrayOperations } from '../array-utils';
-import { diffArrayWithLCS, diffArraySimple } from '../diff-utils';
-import { PatchError } from '../errors';
+import { generateArrayOperations, batchArrayOperations } from './array-utils';
+import { diffArrayWithLCS, diffArraySimple } from './diff-utils';
+import { PatchError } from './errors';
 
 describe('diffArrayWithLCS', () => {
   test('detects basic array changes', () => {
@@ -10,10 +10,7 @@ describe('diffArrayWithLCS', () => {
     const newArr = [1, 4, 3];
     const patch = diffArrayWithLCS(oldArr, newArr, { basePath: '/arr' });
 
-    expect(patch).toEqual([
-      { op: 'remove', path: '/arr/1' },
-      { op: 'add', path: '/arr/1', value: 4 },
-    ]);
+    expect(patch).toEqual([{ op: 'replace', path: '/arr/1', value: 4 }]);
   });
 
   test('detects move operations', () => {

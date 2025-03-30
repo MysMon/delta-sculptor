@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 
-import { PatchError, PatchErrorCode } from '../errors';
+import { PatchError, PatchErrorCode } from './errors';
 
 describe('PatchError', () => {
   test('creates basic error instance', () => {

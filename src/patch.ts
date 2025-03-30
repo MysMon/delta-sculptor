@@ -349,7 +349,7 @@ export function applyPatchWithRollback(
   options: PatchOptions = {}
 ): void {
   const opts = { ...defaultOptions, ...options };
-  const originalState = deepClone(target);
+  const stateStack: any[] = [deepClone(target)];
   const appliedOps: JsonPatchOperation[] = [];
 
   try {
@@ -366,6 +366,7 @@ export function applyPatchWithRollback(
       try {
         applyOperation(target, op, opts);
         appliedOps.push(op);
+        stateStack.push(deepClone(target));
       } catch (error) {
         // ロールバック処理
         for (let i = appliedOps.length - 1; i >= 0; i--) {
@@ -383,7 +384,7 @@ export function applyPatchWithRollback(
                 handleReplaceOperation(
                   target,
                   appliedOp.path,
-                  getValueByPointer(originalState, appliedOp.path)
+                  getValueByPointer(stateStack[0], appliedOp.path)
                 );
                 break;
               case 'move':
@@ -400,7 +401,7 @@ export function applyPatchWithRollback(
             }
           } catch (rollbackError) {
             // ロールバックに失敗した場合は元の状態に復元
-            Object.assign(target, deepClone(originalState));
+            Object.assign(target, deepClone(stateStack[0]));
             throw new PatchError(
               PatchErrorCode.INTERNAL_ERROR,
               'Failed to rollback changes'
@@ -420,7 +421,7 @@ export function applyPatchWithRollback(
     }
   } catch (error) {
     // 外側のtryブロックでもエラーをキャッチして状態を復元
-    Object.assign(target, deepClone(originalState));
+    Object.assign(target, deepClone(stateStack[0]));
     throw error;
   }
 }

@@ -1,13 +1,13 @@
 import { describe, test, expect } from 'vitest';
 
-import { PatchError } from '../errors';
+import { PatchError } from './errors';
 import {
   applyPatch,
   applyPatchImmutable,
   applyPatchWithRollback,
   applyOperation,
-} from '../patch';
-import { JsonPatch } from '../types';
+} from './patch';
+import { JsonPatch } from './types';
 
 describe('applyOperation', () => {
   test('applies add operation', () => {

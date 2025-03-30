@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'vitest';
 
-import { createPatch } from '../diff';
-import { PatchError } from '../errors';
-import { JsonPatchOperation } from '../types';
+import { createPatch } from './diff';
+import { PatchError } from './errors';
+import { JsonPatchOperation } from './types';
 
 interface MoveOperation extends Omit<JsonPatchOperation, 'op'> {
   op: 'move';

@@ -6,7 +6,7 @@ import {
 } from './array-utils';
 import { PatchError } from './errors';
 import type { JsonPatch } from './types';
-import { detectCircular } from './validate';
+import { detectCircular, deepEqual } from './validate';
 
 interface DiffArrayOptions {
   checkCircular?: boolean;
@@ -35,28 +35,14 @@ export function diffArrayWithLCS(
     throw PatchError.circularReference(basePath);
   }
 
-  // 基本的な配列変更の場合は単純な操作を使用
+  // シンプルな変更の場合はdiffArraySimpleを使用
   const isSimpleChange =
     oldArr.length === newArr.length &&
     oldArr.length <= 3 &&
-    oldArr.filter((v, i) => v !== newArr[i]).length === 1;
+    oldArr.filter((v, i) => !deepEqual(v, newArr[i])).length === 1;
 
   if (isSimpleChange) {
-    const patch: JsonPatch = [];
-    for (let i = 0; i < oldArr.length; i++) {
-      if (oldArr[i] !== newArr[i]) {
-        patch.push({
-          op: 'remove',
-          path: `${basePath}/${i}`,
-        });
-        patch.push({
-          op: 'add',
-          path: `${basePath}/${i}`,
-          value: newArr[i],
-        });
-      }
-    }
-    return patch;
+    return diffArraySimple(oldArr, newArr, { basePath });
   }
 
   // 複雑な変換の場合は最適化された操作を使用
@@ -91,18 +77,32 @@ export function diffArraySimple(
   const patch: JsonPatch = [];
   const minLen = Math.min(oldArr.length, newArr.length);
 
-  // Handle common length
+  // Handle common length - 共通部分の処理
   for (let i = 0; i < minLen; i++) {
-    if (oldArr[i] !== newArr[i]) {
-      patch.push({
-        op: 'replace',
-        path: `${basePath}/${i}`,
-        value: newArr[i],
-      });
+    if (!deepEqual(oldArr[i], newArr[i])) {
+      if (
+        typeof oldArr[i] === 'object' &&
+        oldArr[i] !== null &&
+        typeof newArr[i] === 'object' &&
+        newArr[i] !== null
+      ) {
+        // For nested objects/arrays, generate nested patches
+        patch.push({
+          op: 'replace',
+          path: `${basePath}/${i}`,
+          value: newArr[i],
+        });
+      } else {
+        patch.push({
+          op: 'replace',
+          path: `${basePath}/${i}`,
+          value: newArr[i],
+        });
+      }
     }
   }
 
-  // Handle added elements
+  // Handle added elements - 追加要素の処理
   for (let i = minLen; i < newArr.length; i++) {
     patch.push({
       op: 'add',
@@ -111,11 +111,11 @@ export function diffArraySimple(
     });
   }
 
-  // Handle removed elements
-  for (let i = newArr.length; i < oldArr.length; i++) {
+  // Handle removed elements - 削除要素の処理（後ろから）
+  for (let i = oldArr.length - 1; i >= minLen; i--) {
     patch.push({
       op: 'remove',
-      path: `${basePath}/${oldArr.length - 1 - (i - newArr.length)}`,
+      path: `${basePath}/${i}`,
     });
   }
 

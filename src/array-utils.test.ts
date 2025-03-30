@@ -10,8 +10,8 @@ import {
   isArrayPath,
   getArrayBasePath,
   expandArrayOperations,
-} from '../array-utils';
-import { PatchError } from '../errors';
+} from './array-utils';
+import { PatchError } from './errors';
 
 describe('validateArrayIndex', () => {
   test('validates valid indices', () => {
@@ -140,7 +140,9 @@ describe('batchArrayOperations', () => {
       generateArrayOperations([], ['a', 'b', 'c'])
     );
     expect(operations).toEqual([
-      { op: 'add', path: '/0', value: ['a', 'b', 'c'] },
+      { op: 'add', path: '/0', value: 'a' },
+      { op: 'add', path: '/1', value: 'b' },
+      { op: 'add', path: '/2', value: 'c' },
     ]);
   });
 

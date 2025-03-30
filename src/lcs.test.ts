@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 
-import { findLCS, clearLCSCache, getArraySimilarity } from '../lcs';
+import { findLCS, clearLCSCache, getArraySimilarity } from './lcs';
 
 describe('LCS (Longest Common Subsequence)', () => {
   test('finds LCS for simple arrays', () => {

@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'vitest';
 
-import { PatchError } from '../errors';
-import { createInversePatch, applyPatchWithInverse } from '../inverse';
-import { JsonPatch } from '../types';
+import { PatchError } from './errors';
+import { createInversePatch, applyPatchWithInverse } from './inverse';
+import { JsonPatch } from './types';
 
 describe('createInversePatch', () => {
   test('creates inverse for add operation', () => {
