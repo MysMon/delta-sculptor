@@ -175,6 +175,52 @@ try {
 }
 ```
 
+### Safe Patching with `tryApplyPatch`
+
+```typescript
+import { DeltaSculptor, JsonPatch } from 'delta-sculptor';
+
+const oldDoc = { a: 1, b: 2 };
+const invalidPatch: JsonPatch = [{ op: 'add', path: '/a/b/c', value: 3 }]; // Invalid path for 'add' on a number
+
+const patchResult = DeltaSculptor.tryApplyPatch(oldDoc, invalidPatch);
+
+if (patchResult.success) {
+  console.log('Patch applied:', patchResult.result);
+} else {
+  console.error('Patch failed:', patchResult.error?.message);
+  console.log('Original document:', patchResult.result); // oldDoc remains unchanged
+}
+```
+
+### Generating an Inverse Patch (without applying)
+
+```typescript
+import { DeltaSculptor, JsonPatch } from 'delta-sculptor';
+
+const originalDoc = { x: 10, y: 20 };
+const forwardPatch: JsonPatch = [
+  { op: 'replace', path: '/x', value: 100 },
+  { op: 'add', path: '/z', value: 300 },
+];
+
+// Create an inverse patch without modifying originalDoc
+const inversePatch = DeltaSculptor.createInversePatch(originalDoc, forwardPatch);
+console.log('Original document:', originalDoc); // { x: 10, y: 20 }
+console.log('Forward patch:', forwardPatch);
+console.log('Inverse patch:', inversePatch);
+// Example: inversePatch might be:
+// [
+//   { op: 'replace', path: '/x', value: 10 },
+//   { op: 'remove', path: '/z' }
+// ]
+
+// Later, if forwardPatch was applied to some state...
+// let currentState = { ...originalDoc };
+// DeltaSculptor.applyPatch(currentState, forwardPatch); // currentState is now { x: 100, y: 20, z: 300 }
+// DeltaSculptor.applyPatch(currentState, inversePatch); // currentState is now { x: 10, y: 20 }
+```
+
 ## API Reference
 
 ### DeltaSculptor
@@ -187,8 +233,9 @@ Options:
 
 - `detectMove?: boolean` - Enable move operation detection
 - `batchArrayOps?: boolean` - Batch sequential array operations
-- `maxBatchSize?: number` - Maximum size for batched operations
+- `maxBatchSize?: number` - Maximum number of sequential array operations to batch when `batchArrayOps` is true. Defaults to `100`.
 - `maxDepth?: number` - Maximum recursion depth
+- `checkCircular?: boolean` - Enable or disable circular reference detection during diff creation. Defaults to `true`.
 
 #### `applyPatch(target: any, patch: JsonPatch, options?: PatchOptions): void`
 
@@ -205,6 +252,23 @@ Applies a patch with automatic rollback on failure.
 #### `applyPatchWithInverse(obj: any, patch: JsonPatch, options?: InversePatchOptions): JsonPatch`
 
 Applies a patch and returns an inverse patch that can undo the changes.
+
+#### `tryApplyPatch<T>(target: T, patch: JsonPatch, options?: PatchOptions): PatchResult<T>`
+
+Safely validates and applies a patch, returning a result object.
+The result object contains `result`, `success`, `appliedPatch` (if successful), and `error` (if failed).
+
+#### `applyInversePatch<T>(target: T, inversePatch: JsonPatch, options?: PatchOptions): void`
+
+Applies an inverse patch to undo changes, modifying the target in place.
+
+#### `createInversePatch<T>(prePatchObj: T, patch: JsonPatch, options?: InversePatchOptions): JsonPatch`
+
+Creates an inverse patch from the original object and a forward patch.
+
+#### `validatePatch(patch: JsonPatch): void`
+
+Validates a JSON Patch for RFC 6902 compliance and internal consistency. Throws an error if the patch is invalid.
 
 ## Development
 
