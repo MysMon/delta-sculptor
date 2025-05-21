@@ -247,14 +247,20 @@ export function batchArrayOperations(
         j++;
       }
 
-      // バッチ処理せずに個別のadd操作を生成
-      values.forEach((value, offset) => {
+      if (values.length > 1) {
         result.push({
           op: 'add',
-          path: `/${current.index + offset}`,
-          value,
+          path: `/${current.index}`, // Path is the starting index
+          value: values, // Value is the array of items to add
         });
-      });
+      } else if (values.length === 1) {
+        result.push({
+          op: 'add',
+          path: `/${current.index}`,
+          value: values[0],
+        });
+      }
+      // If values.length is 0 (should not happen if current.type is 'add'), nothing is pushed.
 
       i = j;
       continue;

@@ -337,17 +337,18 @@ export function createInversePatch(
             throw PatchError.pathNotFound(operation.from);
           }
 
-          // 移動先パスの存在を確認
-          const toValue = getValueByPointer(originalState, normalizedPath);
-          if (toValue === undefined) {
-            throw PatchError.pathNotFound(normalizedPath);
-          }
+          // 移動先パスの存在を確認 (Removed as per request)
+          // const toValue = getValueByPointer(originalState, normalizedPath);
+          // if (toValue === undefined) {
+          //   throw PatchError.pathNotFound(normalizedPath);
+          // }
 
-          const fromPath = normalizeArrayPath(originalState, operation.from);
+          const inverseToPath = normalizeArrayPath(originalState, operation.from); // Original operation's source
+          const inverseFromPath = normalizedPath; // Original operation's destination
           inverse.push({
             op: 'move',
-            path: fromPath,
-            from: normalizedPath,
+            path: inverseToPath,
+            from: inverseFromPath,
           });
           break;
         }
