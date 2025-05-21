@@ -385,7 +385,7 @@ describe('applyPatchWithRollback', () => {
     };
     const patch: JsonPatch = [
       { op: 'replace', path: '/deep/nested/value', value: 2 },
-      { op: 'add', path: '/deep/nested/invalid/path', value: 'error' },
+      { op: 'add', path: '/deep/nested/value/foo', value: 'error' }, // Changed operation
     ];
 
     expect(() => applyPatchWithRollback(obj, patch)).toThrow(PatchError);
