@@ -254,14 +254,31 @@ export function createPatch({
   }
 
   if (Array.isArray(oldObj) && Array.isArray(newObj)) {
-    const useSimpleDiff = !detectMove || basePath.includes('/');
+    const internalCreatePatch = (localOld: any, localNew: any, localBasePath: string): JsonPatch => {
+      return createPatch({
+        oldObj: localOld,
+        newObj: localNew,
+        params: { ...params, basePath: localBasePath, currentDepth: (params.currentDepth || 0) + 1 },
+      });
+    };
+    const useSimpleDiff = !detectMove;
     if (useSimpleDiff) {
-      return diffArraySimple(oldObj, newObj, { basePath });
+      return diffArraySimple(oldObj, newObj, { basePath, batchArrayOps }, internalCreatePatch);
     }
-    return diffArrayWithLCS(oldObj, newObj, {
-      batchArrayOps,
-      basePath,
-    });
+    return diffArrayWithLCS(
+      oldObj,
+      newObj,
+      {
+        batchArrayOps,
+        maxBatchSize,
+        basePath,
+        checkCircular,
+        detectMove,
+        maxDepth,
+        currentDepth,
+      },
+      internalCreatePatch
+    );
   }
 
   return handleObjects({

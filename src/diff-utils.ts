@@ -5,7 +5,7 @@ import {
   optimizeJsonPatch,
 } from './array-utils';
 import { PatchError } from './errors';
-import type { JsonPatch } from './types';
+import type { JsonPatch } from './types'; // Ensure JsonPatch is imported
 import { detectCircular, deepEqual } from './validate';
 
 interface DiffArrayOptions {
@@ -21,7 +21,8 @@ interface DiffArrayOptions {
 export function diffArrayWithLCS(
   oldArr: any[],
   newArr: any[],
-  params: DiffArrayOptions = {}
+  params: DiffArrayOptions = {},
+  recursiveDiffFn?: (oldItem: any, newItem: any, itemPath: string) => JsonPatch
 ): JsonPatch {
   const {
     checkCircular = true,
@@ -42,7 +43,7 @@ export function diffArrayWithLCS(
     oldArr.filter((v, i) => !deepEqual(v, newArr[i])).length === 1;
 
   if (isSimpleChange) {
-    return diffArraySimple(oldArr, newArr, { basePath });
+    return diffArraySimple(oldArr, newArr, { basePath }, recursiveDiffFn);
   }
 
   // 複雑な変換の場合は最適化された操作を使用
@@ -71,53 +72,127 @@ export function diffArrayWithLCS(
 export function diffArraySimple(
   oldArr: any[],
   newArr: any[],
-  params: { basePath?: string } = {}
+  params: { basePath?: string; batchArrayOps?: boolean } = {},
+  recursiveDiffFn?: (oldItem: any, newItem: any, itemPath: string) => JsonPatch
 ): JsonPatch {
-  const { basePath = '' } = params;
+  const { basePath = '', batchArrayOps = false } = params;
   const patch: JsonPatch = [];
-  const minLen = Math.min(oldArr.length, newArr.length);
+  const oldLen = oldArr.length;
+  const newLen = newArr.length;
+  const minLen = Math.min(oldLen, newLen);
 
-  // Handle common length - 共通部分の処理
-  for (let i = 0; i < minLen; i++) {
-    if (!deepEqual(oldArr[i], newArr[i])) {
+  if (batchArrayOps) {
+    for (let i = 0; i < minLen; i++) {
+      if (deepEqual(oldArr[i], newArr[i])) {
+        continue;
+      }
+
+      const currentPath = `${basePath}/${i}`;
       if (
+        recursiveDiffFn &&
         typeof oldArr[i] === 'object' &&
         oldArr[i] !== null &&
         typeof newArr[i] === 'object' &&
-        newArr[i] !== null
+        newArr[i] !== null &&
+        !Array.isArray(oldArr[i]) &&
+        !Array.isArray(newArr[i])
       ) {
-        // For nested objects/arrays, generate nested patches
+        patch.push(...recursiveDiffFn(oldArr[i], newArr[i], currentPath));
+        continue;
+      }
+
+      // Start of a differing block
+      let j = i;
+      while (j < minLen) {
+        if (deepEqual(oldArr[j], newArr[j])) {
+          break; // End of block if elements are equal
+        }
+        // Check if the differing element should be handled by recursion
+        if (
+          recursiveDiffFn &&
+          typeof oldArr[j] === 'object' &&
+          oldArr[j] !== null &&
+          typeof newArr[j] === 'object' &&
+          newArr[j] !== null &&
+          !Array.isArray(oldArr[j]) &&
+          !Array.isArray(newArr[j])
+        ) {
+          break; // End of block if an element needs recursive diffing
+        }
+        j++;
+      }
+
+      const diffBlockLength = j - i;
+      if (diffBlockLength > 0) {
         patch.push({
-          op: 'replace',
+          op: 'remove',
           path: `${basePath}/${i}`,
-          value: newArr[i],
+          count: diffBlockLength,
         });
-      } else {
+        const valuesToAdd = newArr.slice(i, j);
         patch.push({
-          op: 'replace',
+          op: 'add',
           path: `${basePath}/${i}`,
-          value: newArr[i],
+          value: valuesToAdd.length === 1 ? valuesToAdd[0] : valuesToAdd,
         });
       }
+      i = j - 1; // Continue iteration after the processed block
+    }
+
+    // Handle trailing elements
+    if (newLen > oldLen) {
+      const addedValues = newArr.slice(oldLen);
+      patch.push({
+        op: 'add',
+        path: `${basePath}/${oldLen}`,
+        value: addedValues.length === 1 ? addedValues[0] : addedValues,
+      });
+    } else if (oldLen > newLen) {
+      patch.push({
+        op: 'remove',
+        path: `${basePath}/${newLen}`,
+        count: oldLen - newLen,
+      });
+    }
+  } else {
+    // Original logic for batchArrayOps = false
+    for (let i = 0; i < minLen; i++) {
+      if (!deepEqual(oldArr[i], newArr[i])) {
+        const currentPath = `${basePath}/${i}`;
+        if (
+          recursiveDiffFn &&
+          typeof oldArr[i] === 'object' &&
+          oldArr[i] !== null &&
+          typeof newArr[i] === 'object' &&
+          newArr[i] !== null &&
+          !Array.isArray(oldArr[i]) &&
+          !Array.isArray(newArr[i])
+        ) {
+          patch.push(...recursiveDiffFn(oldArr[i], newArr[i], currentPath));
+        } else {
+          patch.push({
+            op: 'replace',
+            path: currentPath,
+            value: newArr[i],
+          });
+        }
+      }
+    }
+
+    for (let i = minLen; i < newLen; i++) {
+      patch.push({
+        op: 'add',
+        path: `${basePath}/${i}`,
+        value: newArr[i],
+      });
+    }
+
+    for (let i = oldLen - 1; i >= minLen; i--) {
+      patch.push({
+        op: 'remove',
+        path: `${basePath}/${i}`,
+      });
     }
   }
-
-  // Handle added elements - 追加要素の処理
-  for (let i = minLen; i < newArr.length; i++) {
-    patch.push({
-      op: 'add',
-      path: `${basePath}/${i}`,
-      value: newArr[i],
-    });
-  }
-
-  // Handle removed elements - 削除要素の処理（後ろから）
-  for (let i = oldArr.length - 1; i >= minLen; i--) {
-    patch.push({
-      op: 'remove',
-      path: `${basePath}/${i}`,
-    });
-  }
-
   return patch;
 }

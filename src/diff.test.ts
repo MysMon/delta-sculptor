@@ -77,7 +77,7 @@ describe('createPatch', () => {
       const patch = createPatch({
         oldObj,
         newObj,
-        params: { detectMove: false },
+        params: { detectMove: false, batchArrayOps: false },
       });
 
       // Should use replace operations
@@ -129,8 +129,12 @@ describe('createPatch', () => {
       let result = [...oldObj1.arr];
       addPatch.forEach((op: JsonPatchOperation) => {
         if (op.op === 'add' && 'value' in op) {
-          const index = parseInt(op.path.split('/').pop() || '0', 10);
-          result.splice(index, 0, op.value);
+            const index = parseInt(op.path.split('/').pop() || '0', 10);
+            if (Array.isArray(op.value)) {
+              result.splice(index, 0, ...op.value); // Spread array elements
+            } else {
+              result.splice(index, 0, op.value);
+            }
         }
       });
       expect(result).toEqual(newObj1.arr);
@@ -147,8 +151,9 @@ describe('createPatch', () => {
       result = [...oldObj2.arr];
       removePatch.forEach((op: JsonPatchOperation) => {
         if (op.op === 'remove') {
-          const index = parseInt(op.path.split('/').pop() || '0', 10);
-          result.splice(index, 1);
+            const index = parseInt(op.path.split('/').pop() || '0', 10);
+            const count = (op as { count?: number }).count || 1; // Access count safely
+            result.splice(index, count); // Use count for splice
         }
       });
       expect(result).toEqual(newObj2.arr);
@@ -174,14 +179,9 @@ describe('createPatch', () => {
         value: 3,
       },
       {
-        op: 'replace',
+        op: 'move',
+        from: '/obj/arr/1',
         path: '/obj/arr/0',
-        value: 5,
-      },
-      {
-        op: 'replace',
-        path: '/obj/arr/1',
-        value: 4,
       },
     ]);
   });
