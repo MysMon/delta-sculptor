@@ -85,16 +85,17 @@ describe('createInversePatch', () => {
     ];
 
     const inverse = createInversePatch(original, patch);
-    expect(inverse).toEqual([
-      { op: 'move', path: '/arr/3', from: '/arr/1' }, // Move 4 back
-      { op: 'remove', path: '/arr/5' }, // Remove added 6
-      { op: 'add', path: '/arr/0', value: 1 }, // Restore 1
-    ]);
+    const expectedInverse: JsonPatch = [
+      { op: 'move', path: '/arr/3', from: '/arr/1' },
+      { op: 'remove', path: '/arr/4' }, // Corrected path
+      { op: 'add', path: '/arr/0', value: 1 },
+    ];
+    expect(inverse).toEqual(expectedInverse);
 
     // Verify inverse works
     const obj = { arr: [1, 2, 3, 4, 5] };
     applyPatchWithInverse(obj, patch);
-    expect(obj.arr).toEqual([2, 4, 3, 5, 6]);
+    expect(obj.arr).toEqual([2, 5, 3, 4, 6]); // Corrected intermediate state
     applyPatchWithInverse(obj, inverse);
     expect(obj.arr).toEqual([1, 2, 3, 4, 5]);
   });

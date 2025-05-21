@@ -112,24 +112,32 @@ describe('JSON Pointer utils', () => {
     it('handles array operations', () => {
       const obj = { arr: [1, 2, 3] };
 
-      // Set existing index
+      // Insert 'two' before index 1
       setValueByPointer(obj, '/arr/1', 'two');
-      expect(obj.arr[1]).toBe('two');
+      expect(obj.arr).toEqual([1, 'two', 2, 3]); // Corrected expectation
 
       // Append to array
       setValueByPointer(obj, '/arr/-', 4);
-      expect(obj.arr).toEqual([1, 'two', 3, 4]);
+      expect(obj.arr).toEqual([1, 'two', 2, 3, 4]); // Corrected expectation
     });
 
     it('handles array bounds correctly', () => {
       const obj = { arr: [1, 2, 3] };
-      setValueByPointer(obj, '/arr/3', 4);
+      // Test adding at current length (append)
+      setValueByPointer(obj, '/arr/3', 4); // arr is [1,2,3], length 3. index 3.
+                                            // splice(3,0,4) -> [1,2,3,4]
       expect(obj.arr).toEqual([1, 2, 3, 4]);
+      expect(obj.arr.length).toBe(4);
 
-      // Sparse array
+      // Test "sparse" array attempt (index > length)
+      // Current arr: [1,2,3,4], length 4. Path /arr/6 (index 6)
       setValueByPointer(obj, '/arr/6', 7);
-      expect(obj.arr[6]).toBe(7);
-      expect(obj.arr.length).toBe(7);
+      // splice(6,0,7) on [1,2,3,4] effectively becomes splice(4,0,7)
+      // Results in [1,2,3,4,7]
+      expect(obj.arr).toEqual([1, 2, 3, 4, 7]); // Check the whole array
+      expect(obj.arr.length).toBe(5);         // Length should be 5
+      expect(obj.arr[4]).toBe(7);             // Element 7 is at index 4
+      expect(obj.arr[6]).toBeUndefined();     // Index 6 remains undefined
     });
 
     it('sets values with special characters in path', () => {

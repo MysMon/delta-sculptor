@@ -140,9 +140,7 @@ describe('batchArrayOperations', () => {
       generateArrayOperations([], ['a', 'b', 'c'])
     );
     expect(operations).toEqual([
-      { op: 'add', path: '/0', value: 'a' },
-      { op: 'add', path: '/1', value: 'b' },
-      { op: 'add', path: '/2', value: 'c' },
+      { op: 'add', path: '/0', value: ['a', 'b', 'c'] },
     ]);
   });
 

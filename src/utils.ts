@@ -127,7 +127,7 @@ export function setValueByPointer(obj: any, pointer: string, value: any): void {
     const index =
       lastSegment === '-' ? current.length : parseInt(lastSegment, 10);
     validateArrayIndex(current, index, true);
-    current[index] = value;
+    current.splice(index, 0, value);
   } else if (typeof current === 'object' && current !== null) {
     current[lastSegment] = value;
   } else {
