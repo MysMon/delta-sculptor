@@ -13,6 +13,9 @@ interface DiffArrayOptions {
   maxBatchSize?: number;
   batchArrayOps?: boolean;
   basePath?: string;
+  detectMove?: boolean;
+  maxDepth?: number;
+  currentDepth?: number;
 }
 
 /**

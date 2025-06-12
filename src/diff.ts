@@ -107,7 +107,7 @@ interface HandleObjectsArgs {
 function isNestedObjEqual(
   oldVal: any,
   newVal: any,
-  key: string,
+  _key: string,
   path: string
 ): boolean {
   if (!isObject(oldVal) || !isObject(newVal)) {
@@ -254,16 +254,29 @@ export function createPatch({
   }
 
   if (Array.isArray(oldObj) && Array.isArray(newObj)) {
-    const internalCreatePatch = (localOld: any, localNew: any, localBasePath: string): JsonPatch => {
+    const internalCreatePatch = (
+      localOld: any,
+      localNew: any,
+      localBasePath: string
+    ): JsonPatch => {
       return createPatch({
         oldObj: localOld,
         newObj: localNew,
-        params: { ...params, basePath: localBasePath, currentDepth: (params.currentDepth || 0) + 1 },
+        params: {
+          ...params,
+          basePath: localBasePath,
+          currentDepth: (params.currentDepth || 0) + 1,
+        },
       });
     };
     const useSimpleDiff = !detectMove;
     if (useSimpleDiff) {
-      return diffArraySimple(oldObj, newObj, { basePath, batchArrayOps }, internalCreatePatch);
+      return diffArraySimple(
+        oldObj,
+        newObj,
+        { basePath, batchArrayOps },
+        internalCreatePatch
+      );
     }
     return diffArrayWithLCS(
       oldObj,

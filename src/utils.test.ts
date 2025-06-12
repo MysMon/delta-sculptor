@@ -125,7 +125,7 @@ describe('JSON Pointer utils', () => {
       const obj = { arr: [1, 2, 3] };
       // Test adding at current length (append)
       setValueByPointer(obj, '/arr/3', 4); // arr is [1,2,3], length 3. index 3.
-                                            // splice(3,0,4) -> [1,2,3,4]
+      // splice(3,0,4) -> [1,2,3,4]
       expect(obj.arr).toEqual([1, 2, 3, 4]);
       expect(obj.arr.length).toBe(4);
 
@@ -135,9 +135,9 @@ describe('JSON Pointer utils', () => {
       // splice(6,0,7) on [1,2,3,4] effectively becomes splice(4,0,7)
       // Results in [1,2,3,4,7]
       expect(obj.arr).toEqual([1, 2, 3, 4, 7]); // Check the whole array
-      expect(obj.arr.length).toBe(5);         // Length should be 5
-      expect(obj.arr[4]).toBe(7);             // Element 7 is at index 4
-      expect(obj.arr[6]).toBeUndefined();     // Index 6 remains undefined
+      expect(obj.arr.length).toBe(5); // Length should be 5
+      expect(obj.arr[4]).toBe(7); // Element 7 is at index 4
+      expect(obj.arr[6]).toBeUndefined(); // Index 6 remains undefined
     });
 
     it('sets values with special characters in path', () => {

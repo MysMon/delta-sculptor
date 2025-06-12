@@ -225,9 +225,9 @@ describe('applyPatchWithInverse', () => {
       { op: 'remove', path: '/arr/1' },
       { op: 'remove', path: '/arr/1' },
       { op: 'remove', path: '/arr/1' },
-      { op: 'add', path: '/arr/1', value: 2 },
-      { op: 'add', path: '/arr/1', value: 3 },
       { op: 'add', path: '/arr/1', value: 4 },
+      { op: 'add', path: '/arr/1', value: 3 },
+      { op: 'add', path: '/arr/1', value: 2 },
     ]);
 
     // 両方のケースで元の状態に戻ることを確認

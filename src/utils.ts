@@ -224,7 +224,7 @@ export function removeValueByPointer(obj: any, pointer: string): any {
       if (isNaN(index) || index < 0 || index >= current.length) {
         return undefined;
       }
-      current = current[segment];
+      current = current[index];
     } else {
       if (!(segment in current)) {
         return undefined;

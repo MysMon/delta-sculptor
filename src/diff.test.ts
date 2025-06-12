@@ -129,12 +129,12 @@ describe('createPatch', () => {
       let result = [...oldObj1.arr];
       addPatch.forEach((op: JsonPatchOperation) => {
         if (op.op === 'add' && 'value' in op) {
-            const index = parseInt(op.path.split('/').pop() || '0', 10);
-            if (Array.isArray(op.value)) {
-              result.splice(index, 0, ...op.value); // Spread array elements
-            } else {
-              result.splice(index, 0, op.value);
-            }
+          const index = parseInt(op.path.split('/').pop() || '0', 10);
+          if (Array.isArray(op.value)) {
+            result.splice(index, 0, ...op.value); // Spread array elements
+          } else {
+            result.splice(index, 0, op.value);
+          }
         }
       });
       expect(result).toEqual(newObj1.arr);
@@ -151,9 +151,9 @@ describe('createPatch', () => {
       result = [...oldObj2.arr];
       removePatch.forEach((op: JsonPatchOperation) => {
         if (op.op === 'remove') {
-            const index = parseInt(op.path.split('/').pop() || '0', 10);
-            const count = (op as { count?: number }).count || 1; // Access count safely
-            result.splice(index, count); // Use count for splice
+          const index = parseInt(op.path.split('/').pop() || '0', 10);
+          const count = (op as { count?: number }).count || 1; // Access count safely
+          result.splice(index, count); // Use count for splice
         }
       });
       expect(result).toEqual(newObj2.arr);
