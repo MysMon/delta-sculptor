@@ -71,6 +71,7 @@ export { validateArrayIndex };
 
 /**
  * Generates array operations that transform source array into target array
+ * Optimized with single-pass mapping and efficient data structures
  */
 export function generateArrayOperations(
   oldArr: unknown[],
@@ -80,15 +81,15 @@ export function generateArrayOperations(
   const valueToNewIndex = new Map<unknown, number>();
   const valueToOldIndex = new Map<unknown, number>();
 
-  // 新しい配列の値とインデックスをマッピング
-  newArr.forEach((value, index) => {
-    valueToNewIndex.set(value, index);
-  });
-
-  // 古い配列の値とインデックスをマッピング
-  oldArr.forEach((value, index) => {
-    valueToOldIndex.set(value, index);
-  });
+  // Single pass to build both maps - optimized iteration
+  for (let i = 0; i < Math.max(oldArr.length, newArr.length); i++) {
+    if (i < newArr.length) {
+      valueToNewIndex.set(newArr[i], i);
+    }
+    if (i < oldArr.length) {
+      valueToOldIndex.set(oldArr[i], i);
+    }
+  }
 
   // 作業用の配列を準備
   const result = [...oldArr];
@@ -121,14 +122,10 @@ export function generateArrayOperations(
     result.splice(index, 1);
   });
 
-  // 移動の依存関係を考慮して順序を最適化
+  // 移動の依存関係を考慮して順序を最適化 - simplified comparator
   moves.sort((a, b) => {
-    // 移動先インデックスが小さい順に処理
-    if (a.to !== b.to) {
-      return a.to - b.to;
-    }
-    // 同じ移動先の場合は、移動元が大きい方を先に
-    return b.from - a.from;
+    // Use single expression for better performance
+    return a.to - b.to || b.from - a.from;
   });
 
   // 移動を実行
@@ -145,17 +142,18 @@ export function generateArrayOperations(
     }
   }
 
-  // 追加操作を実行
-  const toAdd = newArr.filter(value => !valueToOldIndex.has(value));
-  toAdd.forEach(value => {
-    const targetIndex = newArr.indexOf(value);
-    operations.push({
-      type: 'add',
-      index: targetIndex,
-      value,
-    });
-    result.splice(targetIndex, 0, value);
-  });
+  // 追加操作を実行 - avoid array.filter and indexOf for better performance
+  for (let i = 0; i < newArr.length; i++) {
+    const value = newArr[i];
+    if (!valueToOldIndex.has(value)) {
+      operations.push({
+        type: 'add',
+        index: i,
+        value,
+      });
+      result.splice(i, 0, value);
+    }
+  }
 
   // 結果を検証 - 個別操作を生成するように変更
   if (!deepEqual(result, newArr)) {
@@ -183,6 +181,7 @@ export function generateArrayOperations(
 
 /**
  * Optimizes array operations by detecting moves and combining operations
+ * Enhanced move detection with value matching
  */
 export function optimizeArrayOperations(
   operations: ArrayOperation[]
@@ -193,24 +192,33 @@ export function optimizeArrayOperations(
   while (i < operations.length) {
     const current = operations[i];
 
-    // Check for remove+add pattern that can be converted to move
-    if (
-      current.type === 'remove' &&
-      i + 1 < operations.length &&
-      operations[i + 1].type === 'add'
-    ) {
-      const removeOp = current;
-      const addOp = operations[i + 1];
+    // Look ahead for potential move operations
+    if (current.type === 'remove' && i + 1 < operations.length) {
+      let foundMove = false;
 
-      // Convert to move operation
-      optimized.push({
-        type: 'move',
-        index: addOp.index,
-        from: removeOp.index,
-        value: addOp.value,
-      });
-      i += 2;
-      continue;
+      // Search for a matching add operation within a reasonable window
+      for (let j = i + 1; j < Math.min(i + 5, operations.length); j++) {
+        const addOp = operations[j];
+        if (addOp.type === 'add' && deepEqual(current.value, addOp.value)) {
+          // Found a matching add - convert to move
+          optimized.push({
+            type: 'move',
+            index: addOp.index,
+            from: current.index,
+            value: addOp.value,
+          });
+
+          // Mark both operations as processed
+          operations.splice(j, 1); // Remove the add operation
+          foundMove = true;
+          break;
+        }
+      }
+
+      if (foundMove) {
+        i++;
+        continue;
+      }
     }
 
     optimized.push(current);
@@ -318,25 +326,46 @@ export function optimizeJsonPatch(patch: JsonPatch): JsonPatch {
   return toJsonPatch(optimizedOps, { basePath: '' });
 }
 
+// Cache for path parsing to avoid repeated string operations
+const pathIndexCache = new Map<string, number>();
+
+function getIndexFromPath(path: string): number {
+  const cached = pathIndexCache.get(path);
+  if (cached !== undefined) return cached;
+
+  const lastSlashIndex = path.lastIndexOf('/');
+  const indexStr = path.slice(lastSlashIndex + 1);
+  const index = parseInt(indexStr, 10);
+
+  // Cache the result if cache isn't too large
+  if (pathIndexCache.size < 500) {
+    pathIndexCache.set(path, index);
+  }
+
+  return index;
+}
+
 function convertJsonPatchToArrayOps(patch: JsonPatch): ArrayOperation[] {
-  return patch.map(op => {
-    const path = op.path;
-    const segments = path.split('/');
-    const index = parseInt(segments[segments.length - 1], 10);
+  const result: ArrayOperation[] = [];
+
+  for (const op of patch) {
+    const index = getIndexFromPath(op.path);
 
     switch (op.op) {
       case 'add':
-        return {
+        result.push({
           type: 'add',
           index,
           value: op.value,
-        };
+        });
+        break;
       case 'remove':
-        return {
+        result.push({
           type: 'remove',
           index,
           count: (op as BatchRemoveOperation).count || 1,
-        };
+        });
+        break;
       case 'move':
         if (!op.from) {
           throw new PatchError(
@@ -344,22 +373,25 @@ function convertJsonPatchToArrayOps(patch: JsonPatch): ArrayOperation[] {
             'From path is required for move operation'
           );
         }
-        const fromSegments = op.from.split('/');
-        const fromIndex = parseInt(fromSegments[fromSegments.length - 1], 10);
-        return {
+        const fromIndex = getIndexFromPath(op.from);
+        result.push({
           type: 'move',
           index,
           from: fromIndex,
           value: undefined,
-        };
+        });
+        break;
       default:
-        return {
+        result.push({
           type: 'add',
           index,
           value: 'value' in op ? op.value : undefined,
-        };
+        });
+        break;
     }
-  });
+  }
+
+  return result;
 }
 
 /**

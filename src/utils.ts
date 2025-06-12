@@ -23,12 +23,24 @@ export function buildPointer(segments: string[]): JsonPointer {
   return '/' + segments.map(escapePointerSegment).join('/');
 }
 
+// Cache for parsed pointers to avoid repeated parsing
+const pointerParseCache = new Map<string, string[]>();
+const maxCacheSize = 1000;
+
 /**
- * Parses a JSON Pointer into segments
+ * Parses a JSON Pointer into segments with caching
  */
 export function parsePointer(pointer: string): string[] {
+  // Check cache first
+  const cached = pointerParseCache.get(pointer);
+  if (cached) {
+    return cached;
+  }
+
   if (pointer === '') {
-    return [];
+    const result: string[] = [];
+    pointerParseCache.set(pointer, result);
+    return result;
   }
   if (!pointer.startsWith('/')) {
     throw new PatchError(
@@ -36,7 +48,15 @@ export function parsePointer(pointer: string): string[] {
       'Invalid JSON Pointer: must start with /'
     );
   }
-  return pointer.slice(1).split('/').map(unescapePointerSegment);
+
+  const result = pointer.slice(1).split('/').map(unescapePointerSegment);
+
+  // Cache the result if cache isn't too large
+  if (pointerParseCache.size < maxCacheSize) {
+    pointerParseCache.set(pointer, result);
+  }
+
+  return result;
 }
 
 /**
@@ -252,28 +272,68 @@ export function removeValueByPointer(obj: any, pointer: string): any {
 
 /**
  * Checks if an object contains circular references
+ * Optimized to avoid Set manipulation overhead
  */
 export function hasCircularReferences(obj: any, seen = new Set()): boolean {
   if (obj === null || typeof obj !== 'object') return false;
   if (seen.has(obj)) return true;
 
   seen.add(obj);
-  for (const value of Object.values(obj)) {
-    if (hasCircularReferences(value, seen)) return true;
-  }
-  seen.delete(obj);
 
+  // Use for...in loop for better performance than Object.values()
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      if (hasCircularReferences(obj[key], seen)) {
+        seen.delete(obj); // Clean up before returning
+        return true;
+      }
+    }
+  }
+
+  seen.delete(obj);
   return false;
+}
+
+// Fast paths for common simple types
+function fastDeepEqual(a: any, b: any): boolean | null {
+  // Fast path for identical references
+  if (a === b) return true;
+
+  // Fast path for null/undefined
+  if (a == null || b == null) return a === b;
+
+  // Fast path for different types
+  const typeA = typeof a;
+  const typeB = typeof b;
+  if (typeA !== typeB) return false;
+
+  // Fast path for primitives
+  if (typeA !== 'object') return false;
+
+  // Fast path for array length check
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    // Let full comparison handle array contents
+    return null;
+  }
+
+  // Fast path for object key count
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+
+  // Need full comparison
+  return null;
 }
 
 /**
  * Performs a deep equality comparison between two values
+ * Optimized with fast paths and efficient object comparison
  */
 export function deepEqual(a: any, b: any, seen = new WeakMap()): boolean {
-  // Handle primitive types and null/undefined
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  // Try fast path first
+  const fastResult = fastDeepEqual(a, b);
+  if (fastResult !== null) return fastResult;
 
   // Handle circular references
   if (seen.has(a)) {
@@ -283,25 +343,38 @@ export function deepEqual(a: any, b: any, seen = new WeakMap()): boolean {
 
   // Handle arrays
   if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
       if (!deepEqual(a[i], b[i], seen)) return false;
     }
     return true;
   }
 
-  // Handle objects
+  // Handle objects - optimized key comparison
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
-  if (aKeys.length !== bKeys.length) return false;
 
-  for (const key of aKeys) {
-    if (!bKeys.includes(key)) return false;
-    if (!deepEqual(a[key], b[key], seen)) return false;
+  // Quick key existence check using Set for larger objects
+  if (aKeys.length > 10) {
+    const bKeySet = new Set(bKeys);
+    for (const key of aKeys) {
+      if (!bKeySet.has(key) || !deepEqual(a[key], b[key], seen)) {
+        return false;
+      }
+    }
+  } else {
+    // Direct comparison for smaller objects
+    for (const key of aKeys) {
+      if (!bKeys.includes(key) || !deepEqual(a[key], b[key], seen)) {
+        return false;
+      }
+    }
   }
 
   return true;
 }
+
+// Compiled regex for better performance
+const ESCAPE_SEQUENCE_REGEX = /^[^~]*(?:~[01][^~]*)*$/;
 
 export function validateJsonPointer(pointer: string): void {
   if (typeof pointer !== 'string') {
@@ -321,7 +394,7 @@ export function validateJsonPointer(pointer: string): void {
   // エスケープシーケンスの検証を強化
   const segments = pointer.split('/').slice(1);
   for (const segment of segments) {
-    if (segment.includes('~') && !segment.match(/^[^~]*(?:~[01][^~]*)*$/)) {
+    if (segment.includes('~') && !ESCAPE_SEQUENCE_REGEX.test(segment)) {
       throw new PatchError(
         PatchErrorCode.INVALID_POINTER,
         'Invalid escape sequence in JSON Pointer'

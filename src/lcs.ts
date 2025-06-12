@@ -17,30 +17,32 @@ type Memoized<T> = {
 
 /**
  * Creates a memoized cache with a specified maximum size
+ * Optimized LRU implementation using access counters instead of timestamps
  */
 function createMemoCache<T>(maxSize: number = 1000): Memoized<T> {
-  const cache = new Map<string, { value: T; lastUsed: number }>();
+  const cache = new Map<string, { value: T; accessCount: number }>();
+  let globalAccessCounter = 0;
   let cleanupCounter = 0;
 
   return {
     get: (key: string) => {
       const entry = cache.get(key);
       if (entry) {
-        entry.lastUsed = Date.now();
+        entry.accessCount = ++globalAccessCounter;
         return entry.value;
       }
       return undefined;
     },
     set: (key: string, value: T) => {
       if (cache.size >= maxSize) {
-        // Cleanup every 100 operations
         cleanupCounter++;
         if (cleanupCounter >= 100) {
           cleanupCounter = 0;
           // Remove least recently used entries
           const entries = Array.from(cache.entries());
-          entries.sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-          for (let i = 0; i < entries.length / 2; i++) {
+          entries.sort((a, b) => a[1].accessCount - b[1].accessCount);
+          const removeCount = Math.floor(entries.length / 2);
+          for (let i = 0; i < removeCount; i++) {
             cache.delete(entries[i][0]);
           }
         } else {
@@ -51,11 +53,12 @@ function createMemoCache<T>(maxSize: number = 1000): Memoized<T> {
           }
         }
       }
-      cache.set(key, { value, lastUsed: Date.now() });
+      cache.set(key, { value, accessCount: ++globalAccessCounter });
     },
     clear: () => {
       cache.clear();
       cleanupCounter = 0;
+      globalAccessCounter = 0;
     },
   };
 }
@@ -65,6 +68,7 @@ const lcsCache = createMemoCache<LCSResult>();
 
 /**
  * Computes the longest common subsequence between two arrays
+ * Optimized with comparison caching but maintains algorithmic correctness
  */
 export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
   if (arr1.length === 0 || arr2.length === 0) {
@@ -77,14 +81,26 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
     return cached.indices;
   }
 
+  // Build comparison cache to avoid duplicate deepEqual calls
+  const comparisonCache = new Map<string, boolean>();
+  const getComparison = (i: number, j: number): boolean => {
+    const key = `${i}:${j}`;
+    let result = comparisonCache.get(key);
+    if (result === undefined) {
+      result = deepEqual(arr1[i], arr2[j]);
+      comparisonCache.set(key, result);
+    }
+    return result;
+  };
+
+  // Build LCS matrix with comparison caching
   const matrix: number[][] = Array(arr1.length + 1)
     .fill(0)
     .map(() => Array(arr2.length + 1).fill(0));
 
-  // Build LCS matrix with deep equality comparison
   for (let i = 1; i <= arr1.length; i++) {
     for (let j = 1; j <= arr2.length; j++) {
-      if (deepEqual(arr1[i - 1], arr2[j - 1])) {
+      if (getComparison(i - 1, j - 1)) {
         matrix[i][j] = matrix[i - 1][j - 1] + 1;
       } else {
         matrix[i][j] = Math.max(matrix[i - 1][j], matrix[i][j - 1]);
@@ -92,13 +108,13 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
     }
   }
 
-  // Backtrack to find indices
+  // Backtrack to find indices - reuse comparison cache
   const result: number[] = [];
   let i = arr1.length;
   let j = arr2.length;
 
   while (i > 0 && j > 0) {
-    if (deepEqual(arr1[i - 1], arr2[j - 1])) {
+    if (getComparison(i - 1, j - 1)) {
       result.unshift(i - 1);
       i--;
       j--;
@@ -121,60 +137,81 @@ export function findLCS<T>(arr1: T[], arr2: T[]): number[] {
 
 /**
  * Creates a cache key for LCS operations
+ * Optimized with numeric hashing instead of string concatenation
  */
 function getLCSCacheKey<T>(arr1: T[], arr2: T[]): string {
-  // より詳細なキャッシュキーを生成
-  const hash1 = hashArray(arr1);
-  const hash2 = hashArray(arr2);
+  const hash1 = hashArrayFast(arr1);
+  const hash2 = hashArrayFast(arr2);
   return `${arr1.length}:${arr2.length}:${hash1}:${hash2}`;
 }
 
-function hashArray<T>(arr: T[]): string {
-  if (arr.length === 0) return '0';
+/**
+ * Fast numeric hash function using bit operations
+ */
+function hashArrayFast<T>(arr: T[]): number {
+  if (arr.length === 0) return 0;
 
-  // サンプリングポイントを増やして精度を向上
-  const samplePoints = Math.min(20, arr.length);
+  let hash = 0;
+  const samplePoints = Math.min(10, arr.length);
   const step = Math.max(1, Math.floor(arr.length / samplePoints));
 
-  let hash = '';
   for (let i = 0; i < arr.length; i += step) {
-    hash += hashValue(arr[i]) + ':';
+    const valueHash = hashValueFast(arr[i]);
+    // Mix bits using multiplication and XOR
+    hash = ((hash << 5) - hash + valueHash) | 0; // |0 ensures 32-bit integer
   }
 
-  // 末尾の要素も含める
+  // Include last element if not already sampled
   if (arr.length > 1 && (arr.length - 1) % step !== 0) {
-    hash += hashValue(arr[arr.length - 1]);
+    const valueHash = hashValueFast(arr[arr.length - 1]);
+    hash = ((hash << 5) - hash + valueHash) | 0;
   }
 
-  return hash;
+  return hash >>> 0; // Convert to unsigned 32-bit integer
 }
 
-function hashValue(value: any): string {
-  if (value === null) return 'n';
-  if (value === undefined) return 'u';
+/**
+ * Fast numeric hash for individual values
+ */
+function hashValueFast(value: any): number {
+  if (value === null) return 1;
+  if (value === undefined) return 0;
 
   if (typeof value === 'object') {
     if (Array.isArray(value)) {
-      // 配列の場合は長さと最初の要素をハッシュに含める
-      return `a${value.length}:${hashValue(value[0])}`;
+      return (value.length * 2654435761) >>> 0; // Large prime multiplier
     }
-    if (value.id !== undefined) return `i${value.id}`;
-    if (value.key !== undefined) return `k${value.key}`;
-    // オブジェクトの場合はキーの数を含める
-    return `o${Object.keys(value).length}`;
+    if (value.id !== undefined) {
+      return hashValueFast(value.id) * 3;
+    }
+    if (value.key !== undefined) {
+      return hashValueFast(value.key) * 5;
+    }
+    return (Object.keys(value).length * 2654435761) >>> 0;
   }
 
-  const type = typeof value;
-  switch (type) {
+  switch (typeof value) {
     case 'number':
-      return `d${value}`;
+      // Handle both integers and floats
+      return Math.abs(value * 2654435761) >>> 0;
     case 'boolean':
-      return `b${value}`;
+      return value ? 1231 : 1237; // Common hash codes for booleans
     case 'string':
-      return `s${value.length}:${value.slice(0, 10)}`;
+      return stringHashFast(value);
     default:
-      return `x${String(value)}`;
+      return stringHashFast(String(value));
   }
+}
+
+/**
+ * Fast string hash using djb2 algorithm
+ */
+function stringHashFast(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+  }
+  return hash >>> 0;
 }
 
 /**
