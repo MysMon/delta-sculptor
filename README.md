@@ -221,6 +221,50 @@ console.log('Inverse patch:', inversePatch);
 // DeltaSculptor.applyPatch(currentState, inversePatch); // currentState is now { x: 10, y: 20 }
 ```
 
+### Performance Monitoring
+
+Monitor patch operation performance for optimization:
+
+```typescript
+import { DeltaSculptor } from 'delta-sculptor';
+
+const largeObj = { /* large object */ };
+const patch = [/* patch operations */];
+
+// Measure performance
+const result = DeltaSculptor.measurePerformance(
+  () => DeltaSculptor.applyPatch(largeObj, patch),
+  { includeMemory: true }
+);
+
+console.log(`Operation took ${result.duration}ms`);
+console.log(`Memory usage: ${result.memoryUsage?.heapUsed} bytes`);
+console.log(`Operations per second: ${result.opsPerSecond}`);
+```
+
+### Debugging Support
+
+Debug patch operations with detailed information:
+
+```typescript
+import { DeltaSculptor } from 'delta-sculptor';
+
+const patch = [
+  { op: 'replace', path: '/a', value: 3 },
+  { op: 'add', path: '/b/c', value: 4 },
+];
+
+// Debug patch
+const debugInfo = DeltaSculptor.debugPatch(patch, {
+  validatePaths: true,
+  analyzeComplexity: true,
+});
+
+console.log('Patch analysis:', debugInfo.analysis);
+console.log('Potential issues:', debugInfo.warnings);
+console.log('Complexity score:', debugInfo.complexity);
+```
+
 ## API Reference
 
 ### DeltaSculptor
@@ -269,6 +313,14 @@ Creates an inverse patch from the original object and a forward patch.
 #### `validatePatch(patch: JsonPatch): void`
 
 Validates a JSON Patch for RFC 6902 compliance and internal consistency. Throws an error if the patch is invalid.
+
+#### `measurePerformance<T>(operation: () => T, options?: PerformanceOptions): PerformanceResult<T>`
+
+Measures the performance of patch operations, providing detailed metrics for optimization.
+
+#### `debugPatch(patch: JsonPatch, options?: DebugOptions): DebugInfo`
+
+Provides detailed debugging information about a patch, including operation analysis and potential issues.
 
 ## Development
 

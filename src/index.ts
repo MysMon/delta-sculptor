@@ -1,3 +1,4 @@
+import { debugPatch, DebugOptions, DebugInfo } from './debug';
 import { createPatch, CreateDiffOptions } from './diff';
 import { createInversePatch, applyPatchWithInverse } from './inverse';
 import {
@@ -6,6 +7,11 @@ import {
   applyPatchWithRollback,
   PatchOptions,
 } from './patch';
+import {
+  measurePerformance,
+  PerformanceOptions,
+  PerformanceResult,
+} from './performance';
 import {
   JsonPatch,
   JsonPatchOperation,
@@ -47,6 +53,10 @@ export {
   PatchResult,
   PatchStatus,
   Patchable,
+  PerformanceOptions,
+  PerformanceResult,
+  DebugOptions,
+  DebugInfo,
 };
 
 /**
@@ -213,5 +223,28 @@ export class DeltaSculptor {
     options?: PatchOptions
   ): void {
     applyPatchWithRollback(target, patch, options);
+  }
+
+  /**
+   * Measures the performance of an operation
+   * @param operation The operation to measure
+   * @param options Performance measurement options
+   * @returns Performance metrics and operation result
+   */
+  static measurePerformance<T>(
+    operation: () => T | Promise<T>,
+    options?: PerformanceOptions
+  ): PerformanceResult<T> | Promise<PerformanceResult<T>> {
+    return measurePerformance(operation, options);
+  }
+
+  /**
+   * Provides detailed debugging information about a patch
+   * @param patch The JSON Patch to debug
+   * @param options Debug configuration options
+   * @returns Debug information and analysis
+   */
+  static debugPatch(patch: JsonPatch, options?: DebugOptions): DebugInfo {
+    return debugPatch(patch, options);
   }
 }
